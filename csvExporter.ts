@@ -4,10 +4,12 @@ export type CsvRow = {
   company_name: string;
   company_number: string;
   incorporation_date: string;
+  sic_codes: string;
+  company_type: string;
+  registered_office_address: string;
   directors: string;
-  has_online_presence: boolean;
-  website_url: string | undefined;
-  linkedin_url: string | undefined;
+  has_linkedin: boolean;
+  linkedin_url: string | null;
 };
 
 export async function exportToCsv(
@@ -18,9 +20,11 @@ export async function exportToCsv(
     "company_name",
     "company_number",
     "incorporation_date",
+    "sic_codes",
+    "company_type",
+    "registered_office_address",
     "directors",
-    "has_online_presence",
-    "website_url",
+    "has_linkedin",
     "linkedin_url",
   ];
 
@@ -31,9 +35,11 @@ export async function exportToCsv(
       row.company_name,
       row.company_number,
       row.incorporation_date,
+      row.sic_codes,
+      row.company_type,
+      row.registered_office_address,
       row.directors,
-      String(row.has_online_presence),
-      row.website_url ?? "",
+      String(row.has_linkedin),
       row.linkedin_url ?? "",
     ];
 

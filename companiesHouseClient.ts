@@ -8,6 +8,26 @@ export type CompanySearchItem = {
   date_of_creation?: string;
 };
 
+export type RegisteredOfficeAddress = {
+  address_line_1?: string;
+  address_line_2?: string;
+  locality?: string;
+  region?: string;
+  postal_code?: string;
+  country?: string;
+  premises?: string;
+};
+
+export type CompanyProfile = {
+  company_name: string;
+  company_number: string;
+  date_of_creation?: string;
+  company_status?: string;
+  type?: string;
+  sic_codes?: string[];
+  registered_office_address?: RegisteredOfficeAddress;
+};
+
 export type OfficerItem = {
   name?: string;
   officer_role?: string;
@@ -31,7 +51,10 @@ export class CompaniesHouseClient {
   private http: AxiosInstance;
   private maxRetries: number;
 
-  constructor(apiKey: string, maxRetries = 4) {
+  constructor(
+    apiKey: string,
+    maxRetries = Number.parseInt(process.env.CH_MAX_RETRIES || "6", 10)
+  ) {
     if (!apiKey) {
       throw new Error("Missing COMPANIES_HOUSE_API_KEY");
     }
@@ -81,6 +104,14 @@ export class CompaniesHouseClient {
     return results;
   }
 
+  async getCompanyProfile(companyNumber: string): Promise<CompanyProfile> {
+    const response = await this.requestWithRetry<CompanyProfile>({
+      method: "GET",
+      url: `/company/${encodeURIComponent(companyNumber)}`,
+    });
+    return response.data;
+  }
+
   async getCompanyOfficers(companyNumber: string): Promise<OfficerItem[]> {
     const results: OfficerItem[] = [];
     let startIndex = 0;
@@ -121,21 +152,43 @@ export class CompaniesHouseClient {
 
         const status = err?.response?.status;
         const retryAfterHeader = err?.response?.headers?.["retry-after"];
+        const rateLimitResetHeader = err?.response?.headers?.["x-ratelimit-reset"];
         const retryAfterSeconds = retryAfterHeader
           ? Number.parseInt(retryAfterHeader, 10)
+          : NaN;
+        const rateLimitResetEpochSeconds = rateLimitResetHeader
+          ? Number.parseInt(rateLimitResetHeader, 10)
           : NaN;
 
         if (attempt > this.maxRetries || (status && status < 500 && status !== 429)) {
           throw err;
         }
 
-        const backoffMs = this.computeBackoffMs(attempt, retryAfterSeconds);
+        const backoffMs = this.computeBackoffMs(
+          attempt,
+          retryAfterSeconds,
+          rateLimitResetEpochSeconds
+        );
         await this.sleep(backoffMs);
       }
     }
   }
 
-  private computeBackoffMs(attempt: number, retryAfterSeconds: number): number {
+  private computeBackoffMs(
+    attempt: number,
+    retryAfterSeconds: number,
+    rateLimitResetEpochSeconds: number
+  ): number {
+    // Companies House provides x-ratelimit-reset as epoch seconds.
+    // If present, wait until the reset boundary before retrying.
+    if (!Number.isNaN(rateLimitResetEpochSeconds) && rateLimitResetEpochSeconds > 0) {
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      const waitSeconds = rateLimitResetEpochSeconds - nowSeconds;
+      if (waitSeconds > 0) {
+        return (waitSeconds + 1) * 1000;
+      }
+    }
+
     if (!Number.isNaN(retryAfterSeconds) && retryAfterSeconds > 0) {
       return retryAfterSeconds * 1000;
     }

@@ -1,63 +1,96 @@
+import axios from "axios";
+import type { AxiosError } from "axios";
+
 export type SearchResult = {
   title: string;
   url: string;
 };
 
 export type EnrichmentResult = {
-  has_online_presence: boolean;
-  website_url: string | undefined;
-  linkedin_url: string | undefined;
+  has_linkedin: boolean;
+  linkedin_url: string | null;
 };
 
-type MockSearchData = Record<string, SearchResult[]>;
-
 export class EnrichmentService {
-  private mockData: MockSearchData;
+  private apiKey: string;
+  private baseUrl: string;
+  private maxRetries: number;
 
   constructor() {
-    this.mockData = this.loadMockData();
+    this.apiKey = process.env.SEARCH_API_KEY || "";
+    this.baseUrl = process.env.SEARCH_API_URL || "https://www.searchapi.io/api/v1/search";
+    this.maxRetries = Number.parseInt(process.env.SEARCH_MAX_RETRIES || "4", 10);
   }
 
   async enrichCompany(companyName: string): Promise<EnrichmentResult> {
-    const websiteQuery = `${companyName} official website`;
-    const linkedinQuery = `${companyName} LinkedIn`;
+    if (!this.apiKey) {
+      throw new Error("Missing SEARCH_API_KEY");
+    }
 
-    const [websiteResults, linkedinResults] = await Promise.all([
-      this.search(websiteQuery),
-      this.search(linkedinQuery),
-    ]);
-
-    const websiteUrl: string | undefined = this.pickLikelyWebsite(websiteResults);
-    const linkedinUrl : string | undefined = this.pickLinkedIn(linkedinResults);
+    const linkedinQuery = `"${companyName}" site:linkedin.com/company`;
+    const linkedinResults = await this.searchWithRetry(linkedinQuery);
+    const linkedinUrl = this.pickLinkedIn(linkedinResults) ?? null;
 
     return {
-      has_online_presence: Boolean(websiteUrl || linkedinUrl),
-      website_url: websiteUrl,
+      has_linkedin: Boolean(linkedinUrl),
       linkedin_url: linkedinUrl,
     };
   }
 
-  private async search(query: string): Promise<SearchResult[]> {
-    // Mocked search API. Replace with a real provider later.
-    // You can inject mock results via env var JSON.
-    return this.mockData[query] ?? [];
-  }
+  private async searchWithRetry(query: string): Promise<SearchResult[]> {
+    let attempt = 0;
 
-  private pickLikelyWebsite(results: SearchResult[]): string | undefined {
-    for (const r of results) {
-      const url = this.normalizeUrl(r.url);
-      if (!url) continue;
+    while (true) {
+      try {
+        return await this.search(query);
+      } catch (err) {
+        attempt += 1;
+        const axiosErr = err as AxiosError;
+        const status = axiosErr.response?.status;
+        const retryAfterHeader = axiosErr.response?.headers?.["retry-after"];
+        const retryAfterSeconds = retryAfterHeader
+          ? Number.parseInt(String(retryAfterHeader), 10)
+          : NaN;
+        const retryable = status === 429 || (typeof status === "number" && status >= 500);
 
-      if (
-        url.startsWith("http://") ||
-        url.startsWith("https://")
-      ) {
-        if (!url.includes("linkedin.com")) {
-          return url;
+        if (!retryable || attempt > this.maxRetries) {
+          throw err;
         }
+
+        await this.sleep(this.computeBackoffMs(attempt, retryAfterSeconds));
       }
     }
-    return undefined;
+  }
+
+  private async search(query: string): Promise<SearchResult[]> {
+    const response = await axios.get(this.baseUrl, {
+      timeout: 20_000,
+      params: {
+        engine: "google",
+        q: query,
+        api_key: this.apiKey,
+      },
+    });
+
+    const data = response.data as any;
+    const organic = Array.isArray(data?.organic_results)
+      ? data.organic_results
+      : Array.isArray(data?.results)
+      ? data.results
+      : Array.isArray(data?.items)
+      ? data.items
+      : [];
+
+    if (!Array.isArray(organic)) {
+      throw new Error("Search API returned invalid results payload");
+    }
+
+    return organic
+      .map((item: any) => ({
+        title: String(item?.title ?? ""),
+        url: String(item?.link ?? item?.url ?? ""),
+      }))
+      .filter((r: SearchResult) => Boolean(r.url));
   }
 
   private pickLinkedIn(results: SearchResult[]): string | undefined {
@@ -65,7 +98,7 @@ export class EnrichmentService {
       const url = this.normalizeUrl(r.url);
       if (!url) continue;
 
-      if (url.includes("linkedin.com/company/") || url.includes("linkedin.com/")) {
+      if (url.includes("linkedin.com/company/")) {
         return url;
       }
     }
@@ -74,21 +107,35 @@ export class EnrichmentService {
 
   private normalizeUrl(raw: string | undefined): string | undefined {
     if (!raw) return undefined;
-    return raw.trim();
+    const trimmed = raw.trim();
+    if (!trimmed) return undefined;
+
+    try {
+      const parsed = new URL(trimmed);
+      if (!parsed.hostname.toLowerCase().includes("linkedin.com")) {
+        return undefined;
+      }
+      if (!parsed.pathname.toLowerCase().includes("/company/")) {
+        return undefined;
+      }
+      return parsed.toString();
+    } catch {
+      return undefined;
+    }
   }
 
-  private loadMockData(): MockSearchData {
-    const raw = process.env.MOCK_SEARCH_RESULTS_JSON;
-    if (!raw) return {};
-    try {
-      const parsed = JSON.parse(raw) as MockSearchData;
-      if (parsed && typeof parsed === "object") {
-        return parsed;
-      }
-      return {};
-    } catch {
-      return {};
+  private computeBackoffMs(attempt: number, retryAfterSeconds: number): number {
+    if (!Number.isNaN(retryAfterSeconds) && retryAfterSeconds > 0) {
+      return retryAfterSeconds * 1000;
     }
+
+    const base = 500 * Math.pow(2, attempt - 1);
+    const jitter = Math.floor(Math.random() * 250);
+    return Math.min(10_000, base + jitter);
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }
 
