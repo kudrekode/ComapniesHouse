@@ -1,0 +1,152 @@
+import axios from "axios";
+import type { AxiosInstance, AxiosRequestConfig, AxiosResponse } from "axios";
+
+export type CompanySearchItem = {
+  company_name: string;
+  company_number: string;
+  company_status?: string;
+  date_of_creation?: string;
+};
+
+export type OfficerItem = {
+  name?: string;
+  officer_role?: string;
+  appointed_on?: string;
+  resigned_on?: string | null;
+};
+
+type AdvancedSearchResponse = {
+  items?: CompanySearchItem[];
+  hits?: number;
+};
+
+type OfficersListResponse = {
+  items?: OfficerItem[];
+  total_results?: number;
+  items_per_page?: number;
+  start_index?: number;
+};
+
+export class CompaniesHouseClient {
+  private http: AxiosInstance;
+  private maxRetries: number;
+
+  constructor(apiKey: string, maxRetries = 4) {
+    if (!apiKey) {
+      throw new Error("Missing COMPANIES_HOUSE_API_KEY");
+    }
+
+    this.http = axios.create({
+      baseURL: "https://api.company-information.service.gov.uk",
+      auth: {
+        username: apiKey,
+        password: "",
+      },
+      timeout: 30_000,
+    });
+
+    this.maxRetries = maxRetries;
+  }
+
+  async searchCompaniesIncorporatedBetween(
+    fromDate: string,
+    toDate: string,
+    pageSize = 100
+  ): Promise<CompanySearchItem[]> {
+    const results: CompanySearchItem[] = [];
+    let startIndex = 0;
+
+    while (true) {
+      const response = await this.requestWithRetry<AdvancedSearchResponse>({
+        method: "GET",
+        url: "/advanced-search/companies",
+        params: {
+          incorporated_from: fromDate,
+          incorporated_to: toDate,
+          size: pageSize,
+          start_index: startIndex,
+        },
+      });
+
+      const items = response.data.items ?? [];
+      results.push(...items);
+
+      if (items.length < pageSize) {
+        break;
+      }
+
+      startIndex += pageSize;
+    }
+
+    return results;
+  }
+
+  async getCompanyOfficers(companyNumber: string): Promise<OfficerItem[]> {
+    const results: OfficerItem[] = [];
+    let startIndex = 0;
+    const pageSize = 100;
+
+    while (true) {
+      const response = await this.requestWithRetry<OfficersListResponse>({
+        method: "GET",
+        url: `/company/${encodeURIComponent(companyNumber)}/officers`,
+        params: {
+          items_per_page: pageSize,
+          start_index: startIndex,
+        },
+      });
+
+      const items = response.data.items ?? [];
+      results.push(...items);
+
+      if (items.length < pageSize) {
+        break;
+      }
+
+      startIndex += pageSize;
+    }
+
+    return results;
+  }
+
+  private async requestWithRetry<T>(
+    config: AxiosRequestConfig
+  ): Promise<AxiosResponse<T>> {
+    let attempt = 0;
+    while (true) {
+      try {
+        return await this.http.request<T>(config);
+      } catch (err: any) {
+        attempt += 1;
+
+        const status = err?.response?.status;
+        const retryAfterHeader = err?.response?.headers?.["retry-after"];
+        const retryAfterSeconds = retryAfterHeader
+          ? Number.parseInt(retryAfterHeader, 10)
+          : NaN;
+
+        if (attempt > this.maxRetries || (status && status < 500 && status !== 429)) {
+          throw err;
+        }
+
+        const backoffMs = this.computeBackoffMs(attempt, retryAfterSeconds);
+        await this.sleep(backoffMs);
+      }
+    }
+  }
+
+  private computeBackoffMs(attempt: number, retryAfterSeconds: number): number {
+    if (!Number.isNaN(retryAfterSeconds) && retryAfterSeconds > 0) {
+      return retryAfterSeconds * 1000;
+    }
+
+    const base = 500 * Math.pow(2, attempt - 1);
+    const jitter = Math.floor(Math.random() * 250);
+    return Math.min(10_000, base + jitter);
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+}
+
