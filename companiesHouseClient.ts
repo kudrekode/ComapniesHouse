@@ -33,6 +33,36 @@ export type OfficerItem = {
   officer_role?: string;
   appointed_on?: string;
   resigned_on?: string | null;
+  links?: {
+    officer?: { appointments?: string };
+    self?: string;
+  };
+};
+
+/** One appointment in a director's history (company + role + dates). */
+export type OfficerAppointmentItem = {
+  company_name?: string;
+  company_number?: string;
+  company_status?: string;
+  appointed_to?: {
+    company_name?: string;
+    company_number?: string;
+    company_status?: string;
+  };
+  appointed_on?: string;
+  resigned_on?: string | null;
+  officer_role?: string;
+  appointed_before?: string;
+  links?: {
+    company?: string;
+  };
+};
+
+type OfficerAppointmentsListResponse = {
+  items?: OfficerAppointmentItem[];
+  total_results?: number;
+  items_per_page?: number;
+  start_index?: number;
 };
 
 type AdvancedSearchResponse = {
@@ -71,13 +101,19 @@ export class CompaniesHouseClient {
     this.maxRetries = maxRetries;
   }
 
+  /**
+   * Search companies incorporated between two dates.
+   * @param maxResults - Optional cap per run. Use 0 or omit to fetch all (no limit).
+   */
   async searchCompaniesIncorporatedBetween(
     fromDate: string,
     toDate: string,
-    pageSize = 100
+    pageSize = 100,
+    maxResults?: number
   ): Promise<CompanySearchItem[]> {
     const results: CompanySearchItem[] = [];
     let startIndex = 0;
+    const limit = typeof maxResults === "number" && maxResults > 0 ? maxResults : null;
 
     while (true) {
       const response = await this.requestWithRetry<AdvancedSearchResponse>({
@@ -94,14 +130,14 @@ export class CompaniesHouseClient {
       const items = response.data.items ?? [];
       results.push(...items);
 
-      if (items.length < pageSize) {
-        break;
-      }
+      if (items.length < pageSize) break;
+      if (limit !== null && results.length >= limit) break;
 
       startIndex += pageSize;
+      if (limit !== null && startIndex >= limit) break;
     }
 
-    return results;
+    return limit !== null ? results.slice(0, limit) : results;
   }
 
   async getCompanyProfile(companyNumber: string): Promise<CompanyProfile> {
@@ -121,6 +157,38 @@ export class CompaniesHouseClient {
       const response = await this.requestWithRetry<OfficersListResponse>({
         method: "GET",
         url: `/company/${encodeURIComponent(companyNumber)}/officers`,
+        params: {
+          items_per_page: pageSize,
+          start_index: startIndex,
+        },
+      });
+
+      const items = response.data.items ?? [];
+      results.push(...items);
+
+      if (items.length < pageSize) {
+        break;
+      }
+
+      startIndex += pageSize;
+    }
+
+    return results;
+  }
+
+  /**
+   * List all appointments for an officer (director) across all companies.
+   * Use officer_id from company officers list links.officer.appointments (path segment).
+   */
+  async getOfficerAppointments(officerId: string): Promise<OfficerAppointmentItem[]> {
+    const results: OfficerAppointmentItem[] = [];
+    let startIndex = 0;
+    const pageSize = 100;
+
+    while (true) {
+      const response = await this.requestWithRetry<OfficerAppointmentsListResponse>({
+        method: "GET",
+        url: `/officers/${encodeURIComponent(officerId)}/appointments`,
         params: {
           items_per_page: pageSize,
           start_index: startIndex,
@@ -202,4 +270,3 @@ export class CompaniesHouseClient {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }
-

@@ -12,46 +12,15 @@ const CONCURRENCY = Number.parseInt(process.env.CONCURRENCY || "4", 10);
 const MAX_COMPANIES = Number.parseInt(process.env.MAX_COMPANIES || "0", 10);
 const ENABLE_LINKEDIN_LOOKUP =
   (process.env.ENABLE_LINKEDIN_LOOKUP || "false").toLowerCase() === "true";
-const ALLOWED_SIC_CODES = new Set([
-  "62020",
-  "70229",
-  "73110",
-  "47910",
-  "70210",
-  "62010",
-  "62012",
-  "62090",
-  "73120",
-  "47990",
-  "74100",
-]);
 
 function toDateOnly(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
-function normalizeSic(value: string): string {
-  return value.trim();
-}
-
-function hasAllowedSic(sicCodes: string[] | undefined): boolean {
-  if (!Array.isArray(sicCodes) || sicCodes.length === 0) {
-    return false;
-  }
-
-  const normalized = sicCodes.map(normalizeSic).filter(Boolean);
-  if (normalized.includes("99999")) {
-    return false;
-  }
-
-  return normalized.some((code) => ALLOWED_SIC_CODES.has(code));
-}
-
 function matchesFilters(profile: CompanyProfile): boolean {
   const status = (profile.company_status || "").toLowerCase();
   const companyType = (profile.type || "").toLowerCase();
-
-  return status === "active" && companyType === "ltd" && hasAllowedSic(profile.sic_codes);
+  return status === "active" && companyType === "ltd";
 }
 
 function formatRegisteredOfficeAddress(profile: CompanyProfile): string {
