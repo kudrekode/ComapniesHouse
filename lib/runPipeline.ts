@@ -4,6 +4,12 @@ export type PipelineRow = {
   company_name: string;
   company_number: string;
   incorporation_date: string;
+  /** Timestamp of when the company was first seen in this dashboard store. */
+  first_seen_at?: string;
+  /** True if any current director has prior appointments on other companies. */
+  has_previous_appointments?: boolean | null;
+  /** Number of current directors with prior appointments on other companies. */
+  previous_appointments_count?: number | null;
   sic_codes: string;
   company_type: string;
   registered_office_address: string;
@@ -19,9 +25,21 @@ export type PipelineResult = {
   rows: PipelineRow[];
 };
 
-import { CompaniesHouseClient } from "../companiesHouseClient";
-import type { CompanyProfile, OfficerItem } from "../companiesHouseClient";
-import { EnrichmentService } from "../enrichmentService";
+export type RunPipelineOptions = {
+  /**
+   * Optional lower bound for incremental ingestion.
+   * If omitted, pipeline falls back to default lookback window.
+   */
+  since?: Date;
+  /** Optional upper bound (defaults to current time). */
+  now?: Date;
+  /** Optional list/set of company numbers to skip (already ingested). */
+  excludeCompanyNumbers?: Iterable<string>;
+};
+
+import { CompaniesHouseClient } from "../companiesHouseClient.js";
+import type { CompanyProfile, OfficerItem } from "../companiesHouseClient.js";
+import { EnrichmentService } from "../enrichmentService.js";
 
 /** Extract officer_id from links.officer.appointments URL (e.g. .../officers/Abc123/appointments). */
 function officerIdFromAppointmentsLink(link: string | undefined): string | null {
@@ -31,36 +49,51 @@ function officerIdFromAppointmentsLink(link: string | undefined): string | null 
   return id ?? null;
 }
 
-const API_KEY = process.env.COMPANIES_HOUSE_API_KEY || "";
-const CONCURRENCY = Number.parseInt(process.env.CONCURRENCY || "4", 10);
-const MAX_COMPANIES = Number.parseInt(process.env.MAX_COMPANIES || "0", 10);
-/**
- * Cap how many companies we fetch profiles for per run. 0 = no limit (all companies).
- * With 5-min refresh, each run is typically ~30 new companies; use 0 to get all, or e.g. 500 as safety.
- */
-const MAX_COMPANIES_TO_CHECK = Math.min(
-  Number.parseInt(process.env.MAX_COMPANIES_TO_CHECK || "100", 10) || 100,
-  100
-);
-const ENABLE_LINKEDIN_LOOKUP =
-  (process.env.ENABLE_LINKEDIN_LOOKUP || "false").toLowerCase() === "true";
+function readRuntimeConfig() {
+  const apiKey = process.env.COMPANIES_HOUSE_API_KEY || "";
+  const concurrency = Number.parseInt(process.env.CONCURRENCY || "4", 10);
+  const maxCompanies = Number.parseInt(process.env.MAX_COMPANIES || "0", 10);
+  /**
+   * Cap how many companies we fetch profiles for per run. 0 = no limit (all companies).
+   * With 5-min refresh, use 0 for all, or a finite number as a safety cap.
+   */
+  const maxCompaniesToCheck = Number.parseInt(
+    process.env.MAX_COMPANIES_TO_CHECK || "250",
+    10
+  );
+  const enableLinkedinLookup =
+    (process.env.ENABLE_LINKEDIN_LOOKUP || "false").toLowerCase() === "true";
+
+  return {
+    apiKey,
+    concurrency,
+    maxCompanies,
+    maxCompaniesToCheck,
+    enableLinkedinLookup,
+  };
+}
 
 function toDateOnly(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
-const THIRTY_MINUTES_MS = 30 * 60 * 1000;
+const DEFAULT_LOOKBACK_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /**
- * True if the company's date_of_creation falls within the last 30 minutes.
+ * True if the company's date_of_creation falls within the configured lookback window.
  * - If the API returns ISO datetime (e.g. 2025-02-16T14:22:00), we filter exactly.
- * - If the API returns date-only (YYYY-MM-DD), we keep only today's companies (best effort).
+ * - If the API returns date-only (YYYY-MM-DD), we keep only records on/after the start date.
  */
-function incorporatedInLast30Min(dateOfCreation: string | undefined, now: Date): boolean {
+function incorporatedInLookbackWindow(
+  dateOfCreation: string | undefined,
+  now: Date,
+  since: Date
+): boolean {
   if (!dateOfCreation || typeof dateOfCreation !== "string") return false;
   const s = dateOfCreation.trim().slice(0, 10);
   if (!s) return false;
-  const cutoff = now.getTime() - THIRTY_MINUTES_MS;
+  const cutoff = since.getTime();
+  const sinceDateOnly = toDateOnly(since);
   const nowDateOnly = toDateOnly(now);
   if (s.length === 10 && s[4] === "-" && s[7] === "-") {
     const withTime = dateOfCreation.trim();
@@ -68,7 +101,7 @@ function incorporatedInLast30Min(dateOfCreation: string | undefined, now: Date):
       const t = Date.parse(withTime);
       return !Number.isNaN(t) && t >= cutoff && t <= now.getTime();
     }
-    return s === nowDateOnly;
+    return s >= sinceDateOnly && s <= nowDateOnly;
   }
   return false;
 }
@@ -139,33 +172,52 @@ function createConcurrencyLimiter(limit: number) {
 const PROFILE_PROGRESS_LOG_EVERY = 50;
 const OFFICERS_PROGRESS_LOG_EVERY = 25;
 
-export async function runPipeline(): Promise<PipelineResult> {
+export async function runPipeline(options: RunPipelineOptions = {}): Promise<PipelineResult> {
   const pipelineStart = Date.now();
   console.log("[Pipeline] Starting...");
-  const client = new CompaniesHouseClient(API_KEY);
-  const enrichment = ENABLE_LINKEDIN_LOOKUP ? new EnrichmentService() : null;
+  const config = readRuntimeConfig();
+  const client = new CompaniesHouseClient(config.apiKey);
+  const enrichment = config.enableLinkedinLookup ? new EnrichmentService() : null;
   const safeConcurrency =
-    Number.isFinite(CONCURRENCY) && CONCURRENCY > 0 ? CONCURRENCY : 4;
+    Number.isFinite(config.concurrency) && config.concurrency > 0
+      ? config.concurrency
+      : 4;
 
-  const now = new Date();
-  const since = new Date(now.getTime() - THIRTY_MINUTES_MS);
+  const now = options.now ?? new Date();
+  const requestedSince =
+    options.since ?? new Date(now.getTime() - DEFAULT_LOOKBACK_WINDOW_MS);
+  const since =
+    requestedSince.getTime() <= now.getTime() ? requestedSince : new Date(now);
   const fromDate = toDateOnly(since);
   const toDate = toDateOnly(now);
 
-  const cap = MAX_COMPANIES_TO_CHECK;
-  console.log(`[Pipeline] Searching companies incorporated in last 30 min (${fromDate}–${toDate})...`);
+  const cap = config.maxCompaniesToCheck;
+  const excludedCompanies = new Set<string>();
+  if (options.excludeCompanyNumbers) {
+    for (const companyNumber of options.excludeCompanyNumbers) {
+      const trimmed = String(companyNumber || "").trim();
+      if (!trimmed) continue;
+      excludedCompanies.add(trimmed);
+    }
+  }
+  console.log(
+    `[Pipeline] Searching companies incorporated in ingestion window (${fromDate}–${toDate})...`
+  );
   const allCompanies = await client.searchCompaniesIncorporatedBetween(
     fromDate,
     toDate,
     100,
     cap
   );
-  const toCheck = allCompanies.filter((c) =>
-    incorporatedInLast30Min(c.date_of_creation, now)
+  const inWindow = allCompanies.filter((c) =>
+    incorporatedInLookbackWindow(c.date_of_creation, now, since)
+  );
+  const toCheck = inWindow.filter(
+    (c) => !excludedCompanies.has((c.company_number || "").trim())
   );
   const searchElapsed = ((Date.now() - pipelineStart) / 1000).toFixed(1);
   console.log(
-    `[Pipeline] Search done in ${searchElapsed}s: ${allCompanies.length} fetched (cap ${cap}), ${toCheck.length} in last 30 min (will fetch profiles for these).`
+    `[Pipeline] Search done in ${searchElapsed}s: ${allCompanies.length} fetched (cap ${cap}), ${inWindow.length} in ingestion window, ${toCheck.length} after excluding known companies (will fetch profiles for these).`
   );
 
   const selectedCompanies: CompanyProfile[] = [];
@@ -198,8 +250,8 @@ export async function runPipeline(): Promise<PipelineResult> {
     if (!matchesFilters(profile)) continue;
     selectedCompanies.push(profile);
   }
-  if (Number.isFinite(MAX_COMPANIES) && MAX_COMPANIES > 0) {
-    selectedCompanies.splice(MAX_COMPANIES);
+  if (Number.isFinite(config.maxCompanies) && config.maxCompanies > 0) {
+    selectedCompanies.splice(config.maxCompanies);
   }
 
   const profileElapsed = ((Date.now() - pipelineStart) / 1000).toFixed(1);
@@ -262,7 +314,9 @@ export async function runPipeline(): Promise<PipelineResult> {
   );
 
   const totalElapsed = ((Date.now() - pipelineStart) / 1000).toFixed(1);
-  console.log(`[Pipeline] Done in ${totalElapsed}s: ${rows.length} rows. Next run in 5 min will only add new companies.`);
+  console.log(
+    `[Pipeline] Done in ${totalElapsed}s: ${rows.length} rows. Next run in 5 min will process only new companies.`
+  );
   return {
     updatedAt: now.toISOString(),
     rows,

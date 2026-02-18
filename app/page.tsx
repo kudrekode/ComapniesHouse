@@ -17,6 +17,10 @@ type OfficerAppointment = {
   officer_role?: string;
 };
 
+type TimeWindow = "today" | "24h" | "6h" | "60m" | "30m";
+type SortOrder = "freshest" | "date_asc";
+type PreviousAppointmentsFilter = "any" | "yes" | "no";
+
 function parseDirectorsDetail(directors_detail: string | undefined): DirectorDetail[] {
   if (!directors_detail || typeof directors_detail !== "string") return [];
   try {
@@ -35,11 +39,115 @@ function rowMatchesSicFilter(row: PipelineRow, sicFilter: string): boolean {
   return codes.some((code) => rowCodes.some((rc) => rc.includes(code) || code.includes(rc)));
 }
 
+function parsePrimaryIncorporationExactMs(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed.length > 10 && trimmed[10] === "T") {
+    const parsed = Date.parse(trimmed);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  return null;
+}
+
+function parseIncorporationDateOnly(value: string): string | null {
+  const trimmed = value.trim();
+  if (trimmed.length === 10 && trimmed[4] === "-" && trimmed[7] === "-") return trimmed;
+  if (trimmed.length > 10 && trimmed[10] === "T") return trimmed.slice(0, 10);
+  return null;
+}
+
+function parseFirstSeenMs(value: string | undefined): number | null {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function rowReferenceMs(row: PipelineRow): number | null {
+  const firstSeen = parseFirstSeenMs(row.first_seen_at);
+  if (firstSeen !== null) return firstSeen;
+  return (
+    parsePrimaryIncorporationExactMs(row.incorporation_date) ??
+    null
+  );
+}
+
+function rowIsWithinTimeWindow(row: PipelineRow, window: TimeWindow, nowMs: number): boolean {
+  const ts = rowReferenceMs(row);
+  if (ts === null) return false;
+
+  if (window === "today") {
+    const today = new Date(nowMs).toISOString().slice(0, 10);
+    const incorporationDateOnly = parseIncorporationDateOnly(row.incorporation_date);
+    if (incorporationDateOnly) return incorporationDateOnly === today;
+    return ts <= nowMs;
+  }
+
+  const windowMinutesMap: Record<Exclude<TimeWindow, "today">, number> = {
+    "24h": 24 * 60,
+    "6h": 6 * 60,
+    "60m": 60,
+    "30m": 30,
+  };
+  const cutoff = nowMs - windowMinutesMap[window] * 60 * 1000;
+  return ts >= cutoff && ts <= nowMs;
+}
+
+function rowHasKnownPreviousAppointments(
+  row: PipelineRow,
+  previousAppointmentsByOfficer: Record<string, number>
+): boolean | null {
+  if (typeof row.has_previous_appointments === "boolean") {
+    return row.has_previous_appointments;
+  }
+  const directors = parseDirectorsDetail(row.directors_detail);
+  if (directors.length === 0) return null;
+
+  let hasKnown = false;
+  for (const d of directors) {
+    const count = previousAppointmentsByOfficer[d.officer_id];
+    if (typeof count !== "number") continue;
+    hasKnown = true;
+    if (count > 0) return true;
+  }
+  if (!hasKnown) return null;
+  return false;
+}
+
+function rowMatchesPreviousAppointmentsFilter(
+  row: PipelineRow,
+  filter: PreviousAppointmentsFilter,
+  previousAppointmentsByOfficer: Record<string, number>
+): boolean {
+  if (filter === "any") return true;
+  const hasPrevious = rowHasKnownPreviousAppointments(row, previousAppointmentsByOfficer);
+  if (hasPrevious === null) return false;
+  if (filter === "yes") return hasPrevious === true;
+  return hasPrevious === false;
+}
+
+function freshnessBadgeLabel(row: PipelineRow, nowMs: number): string | null {
+  const ts = rowReferenceMs(row);
+  if (ts === null || ts > nowMs) return null;
+  const ageMinutes = Math.floor((nowMs - ts) / (60 * 1000));
+
+  if (ageMinutes <= 30) return "NEW 30m";
+  if (ageMinutes <= 60) return "NEW 60m";
+  if (ageMinutes <= 180) return "NEW 3h";
+  return null;
+}
+
 export default function DashboardPage() {
   const [data, setData] = useState<PipelineResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sicFilter, setSicFilter] = useState("");
+  const [timeWindow, setTimeWindow] = useState<TimeWindow>("today");
+  const [sortOrder, setSortOrder] = useState<SortOrder>("freshest");
+  const [previousAppointmentsFilter, setPreviousAppointmentsFilter] =
+    useState<PreviousAppointmentsFilter>("any");
+  const [previousAppointmentsByOfficer, setPreviousAppointmentsByOfficer] = useState<
+    Record<string, number>
+  >({});
   const [appointmentsFor, setAppointmentsFor] = useState<{
     officerId: string;
     name: string;
@@ -47,11 +155,35 @@ export default function DashboardPage() {
     appointments: OfficerAppointment[] | null;
     loading: boolean;
   } | null>(null);
+  const renderNowMs = Date.now();
 
   const filteredRows = useMemo(() => {
     if (!data?.rows) return [];
-    return data.rows.filter((row) => rowMatchesSicFilter(row, sicFilter));
-  }, [data?.rows, sicFilter]);
+    const nowMs = Date.now();
+    return data.rows
+      .filter((row) => rowMatchesSicFilter(row, sicFilter))
+      .filter((row) => rowIsWithinTimeWindow(row, timeWindow, nowMs))
+      .filter((row) =>
+        rowMatchesPreviousAppointmentsFilter(
+          row,
+          previousAppointmentsFilter,
+          previousAppointmentsByOfficer
+        )
+      )
+      .sort((a, b) => {
+        if (sortOrder === "date_asc") {
+          const aDate = parseIncorporationDateOnly(a.incorporation_date) || "";
+          const bDate = parseIncorporationDateOnly(b.incorporation_date) || "";
+          if (aDate !== bDate) return aDate.localeCompare(bDate);
+          const aTs = rowReferenceMs(a) ?? 0;
+          const bTs = rowReferenceMs(b) ?? 0;
+          return aTs - bTs;
+        }
+        const aTs = rowReferenceMs(a) ?? 0;
+        const bTs = rowReferenceMs(b) ?? 0;
+        return bTs - aTs;
+      });
+  }, [data?.rows, sicFilter, timeWindow, sortOrder, previousAppointmentsFilter, previousAppointmentsByOfficer]);
 
   useEffect(() => {
     const load = async () => {
@@ -112,6 +244,10 @@ export default function DashboardPage() {
           (a.appointed_to?.company_number || a.company_number || "").trim() !==
           currentCompanyNumber
       );
+      setPreviousAppointmentsByOfficer((prev) => ({
+        ...prev,
+        [officerId]: previousAppointments.length,
+      }));
       setAppointmentsFor({
         officerId,
         name,
@@ -148,7 +284,7 @@ export default function DashboardPage() {
           <>
             <p className="mt-4 text-sm text-slate-600">
               Last updated: {new Date(data.updatedAt).toLocaleString()} · Data refreshes every 5
-              min, cache TTL 30 min
+              min, cache TTL 24h
             </p>
 
             <div className="mt-4 flex flex-wrap items-center gap-3">
@@ -160,11 +296,46 @@ export default function DashboardPage() {
                 onChange={(e) => setSicFilter(e.target.value)}
                 className="rounded border border-slate-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
               />
-              {sicFilter.trim() && (
-                <span className="text-sm text-slate-500">
-                  Showing {filteredRows.length} of {data.rows.length} companies
-                </span>
-              )}
+              <label className="text-sm font-medium text-slate-700">Window:</label>
+              <select
+                value={timeWindow}
+                onChange={(e) => setTimeWindow(e.target.value as TimeWindow)}
+                className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              >
+                <option value="today">Today (default)</option>
+                <option value="24h">Last 24 hours</option>
+                <option value="6h">Last 6 hours</option>
+                <option value="60m">Last 60 minutes</option>
+                <option value="30m">Last 30 minutes</option>
+              </select>
+              <label className="text-sm font-medium text-slate-700">Sort:</label>
+              <select
+                value={sortOrder}
+                onChange={(e) => setSortOrder(e.target.value as SortOrder)}
+                className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              >
+                <option value="freshest">Freshest first</option>
+                <option value="date_asc">Date ascending</option>
+              </select>
+              <label className="text-sm font-medium text-slate-700">
+                Previous appointments:
+              </label>
+              <select
+                value={previousAppointmentsFilter}
+                onChange={(e) =>
+                  setPreviousAppointmentsFilter(
+                    e.target.value as PreviousAppointmentsFilter
+                  )
+                }
+                className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              >
+                <option value="any">Any</option>
+                <option value="yes">Yes</option>
+                <option value="no">No</option>
+              </select>
+              <span className="text-sm text-slate-500">
+                Showing {filteredRows.length} of {data.rows.length} companies
+              </span>
             </div>
 
             <div className="mt-6 overflow-x-auto rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -191,7 +362,18 @@ export default function DashboardPage() {
                         className={idx % 2 === 0 ? "bg-white" : "bg-slate-50"}
                       >
                         <td className="px-4 py-3 align-top whitespace-normal break-words text-slate-800">
-                          {row.company_name}
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span>{row.company_name}</span>
+                            {(() => {
+                              const label = freshnessBadgeLabel(row, renderNowMs);
+                              if (!label) return null;
+                              return (
+                                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">
+                                  {label}
+                                </span>
+                              );
+                            })()}
+                          </div>
                         </td>
                         <td className="px-4 py-3 align-top whitespace-normal break-words text-slate-700">
                           {row.company_number}

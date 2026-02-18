@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { CompaniesHouseClient } from "../../../../../companiesHouseClient";
-
-const API_KEY = process.env.COMPANIES_HOUSE_API_KEY || "";
+import { getSupabaseAdminClient } from "../../../../../lib/supabaseAdmin";
 
 export async function GET(
   _request: NextRequest,
@@ -15,17 +13,30 @@ export async function GET(
     );
   }
 
-  if (!API_KEY) {
-    return NextResponse.json(
-      { error: "Companies House API key not configured" },
-      { status: 500 }
-    );
-  }
-
   try {
-    const client = new CompaniesHouseClient(API_KEY);
-    const appointments = await client.getOfficerAppointments(officerId);
-    return NextResponse.json({ appointments }, { status: 200 });
+    const supabase = getSupabaseAdminClient();
+    const cacheKey = `officer_appointments:${officerId}`;
+    const cached = await supabase
+      .from("ingest_state")
+      .select("value, updated_at")
+      .eq("key", cacheKey)
+      .maybeSingle<{ value: string; updated_at: string }>();
+
+    if (!cached.error && cached.data) {
+      try {
+        const appointments = JSON.parse(cached.data.value || "[]");
+        if (Array.isArray(appointments)) {
+          return NextResponse.json({ appointments, source: "db-cache" }, { status: 200 });
+        }
+      } catch {
+        // malformed cache; return empty below
+      }
+    }
+
+    return NextResponse.json(
+      { appointments: [], source: "db-miss" },
+      { status: 200 }
+    );
   } catch (error) {
     console.error("Officer appointments failed:", error);
     return NextResponse.json(
