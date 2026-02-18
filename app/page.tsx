@@ -39,6 +39,24 @@ function rowMatchesSicFilter(row: PipelineRow, sicFilter: string): boolean {
   return codes.some((code) => rowCodes.some((rc) => rc.includes(code) || code.includes(rc)));
 }
 
+function buildGoogleCompanySearchUrl(row: PipelineRow): string {
+  const directors = parseDirectorsDetail(row.directors_detail);
+  const firstDirector = (directors[0]?.name || "").trim();
+  const parts = [
+    row.company_name,
+    row.company_number,
+    "uk company",
+    firstDirector,
+    row.registered_office_address,
+    "linkedin",
+    "contact",
+  ]
+    .map((p) => (p || "").trim())
+    .filter(Boolean);
+  const query = parts.join(" ");
+  return `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+}
+
 function parsePrimaryIncorporationExactMs(value: string): number | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
@@ -342,13 +360,14 @@ export default function DashboardPage() {
               <table className="min-w-full table-fixed text-sm">
                 <thead className="bg-slate-100 text-left text-slate-700">
                   <tr>
-                    <th className="w-[16%] px-4 py-3 font-medium">Company</th>
+                    <th className="w-[15%] px-4 py-3 font-medium">Company</th>
                     <th className="w-[10%] px-4 py-3 font-medium">Number</th>
                     <th className="w-[10%] px-4 py-3 font-medium">Incorporated</th>
-                    <th className="w-[13%] px-4 py-3 font-medium">SIC Codes</th>
+                    <th className="w-[8%] px-4 py-3 font-medium">SIC Codes</th>
                     <th className="w-[8%] px-4 py-3 font-medium">Type</th>
-                    <th className="w-[22%] px-4 py-3 font-medium">Registered Office</th>
-                    <th className="w-[21%] px-4 py-3 font-medium">Directors</th>
+                    <th className="w-[20%] px-4 py-3 font-medium">Registered Office</th>
+                    <th className="w-[22%] px-4 py-3 font-medium">Directors</th>
+                    <th className="w-[7%] px-4 py-3 font-medium">Search</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -410,6 +429,32 @@ export default function DashboardPage() {
                                 ))
                               : row.directors}
                           </div>
+                        </td>
+                        <td className="px-4 py-3 align-top text-slate-700">
+                          <button
+                            type="button"
+                            aria-label={`Search ${row.company_name} on Google`}
+                            title="Search company on Google"
+                            onClick={() =>
+                              window.open(buildGoogleCompanySearchUrl(row), "_blank", "noopener,noreferrer")
+                            }
+                            className="inline-flex h-8 w-8 items-center justify-center rounded border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                          >
+                            <svg
+                              xmlns="http://www.w3.org/2000/svg"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              className="h-4 w-4"
+                              aria-hidden="true"
+                            >
+                              <circle cx="11" cy="11" r="7" />
+                              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                            </svg>
+                          </button>
                         </td>
                       </tr>
                     );
