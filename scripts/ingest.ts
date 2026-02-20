@@ -449,6 +449,9 @@ async function upsertCompanies(nowIso: string, rows: Awaited<ReturnType<typeof r
     .from("companies")
     .upsert(payload, { onConflict: "company_number" });
   if (error) throw error;
+
+  const { error: queueRefreshError } = await supabase.rpc("refresh_enrichment_queue");
+  if (queueRefreshError) throw queueRefreshError;
 }
 
 async function pruneExpiredRows(nowMs: number): Promise<void> {
