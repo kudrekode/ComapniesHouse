@@ -285,6 +285,11 @@ type LinkedInScore = {
   disqualify_reason?: string;
 };
 
+type LinkedInCandidate = {
+  result: SearchResult;
+  score: LinkedInScore;
+};
+
 const UK_GEO_TERMS = [
   "united kingdom",
   "uk",
@@ -410,13 +415,17 @@ function confidenceFromScore(score: number): number {
   return 0.7;
 }
 
+function toScorePercent(score: number): number {
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
 function pickBestLinkedInMatch(
   results: SearchResult[],
   directorName: string,
   city: string | null,
   companyName: string
-): { result: SearchResult; score: LinkedInScore } | null {
-  let best: { result: SearchResult; score: LinkedInScore } | null = null;
+): LinkedInCandidate | null {
+  let best: LinkedInCandidate | null = null;
   for (const result of results) {
     if (!isValidLinkedInProfileUrl(result.url)) continue;
     const score = scoreLinkedInResult(directorName, city, companyName, result);
@@ -427,6 +436,48 @@ function pickBestLinkedInMatch(
   }
   if (!best) return null;
   return best.score.score >= LINKEDIN_ACCEPT_THRESHOLD ? best : null;
+}
+
+function pickBestObservedCandidate(
+  results: SearchResult[],
+  directorName: string,
+  city: string | null,
+  companyName: string
+): LinkedInCandidate | null {
+  let best: LinkedInCandidate | null = null;
+  for (const result of results) {
+    if (!isValidLinkedInProfileUrl(result.url)) continue;
+    const score = scoreLinkedInResult(directorName, city, companyName, result);
+    if (!best || score.score > best.score.score) {
+      best = { result, score };
+    }
+  }
+  return best;
+}
+
+async function updateCompanySearchDiagnostics(
+  companyNumber: string,
+  candidate: LinkedInCandidate | null
+): Promise<void> {
+  const supabase = getSupabaseAdminClient();
+  const payload = candidate
+    ? {
+        search_confidence_score: toScorePercent(candidate.score.score),
+        search_confidence_reasons: candidate.score.reasons,
+        search_disqualified: candidate.score.disqualified,
+        search_disqualify_reason: candidate.score.disqualify_reason ?? null,
+      }
+    : {
+        search_confidence_score: null,
+        search_confidence_reasons: null,
+        search_disqualified: null,
+        search_disqualify_reason: null,
+      };
+  const { error } = await supabase
+    .from("companies")
+    .update(payload)
+    .eq("company_number", companyNumber);
+  if (error) throw error;
 }
 
 function debugScoreCandidates(
@@ -589,6 +640,8 @@ export async function processEnrichment(
 
   const supabase = getSupabaseAdminClient();
   let usedSearches = 0;
+  let bestObservedCandidate: LinkedInCandidate | null = null;
+  let bestObservedScore = -Infinity;
 
   const originalDirectorName = extractDirectorName(company);
   const directorName = originalDirectorName
@@ -619,6 +672,16 @@ export async function processEnrichment(
         company.company_name
       );
     }
+    const observed = pickBestObservedCandidate(
+      results,
+      directorName,
+      city,
+      company.company_name
+    );
+    if (observed && observed.score.score > bestObservedScore) {
+      bestObservedCandidate = observed;
+      bestObservedScore = observed.score.score;
+    }
 
     const best = pickBestLinkedInMatch(results, directorName, city, company.company_name);
     if (best) {
@@ -635,6 +698,10 @@ export async function processEnrichment(
           has_linkedin: true,
           contact_confidence: normalizeConfidenceScore(confidence),
           contact_source: "serper_search",
+          search_confidence_score: toScorePercent(best.score.score),
+          search_confidence_reasons: best.score.reasons,
+          search_disqualified: false,
+          search_disqualify_reason: null,
         })
         .eq("company_number", item.company_number);
       if (error) throw error;
@@ -673,6 +740,16 @@ export async function processEnrichment(
         company.company_name
       );
     }
+    const observed = pickBestObservedCandidate(
+      results,
+      directorName,
+      city,
+      company.company_name
+    );
+    if (observed && observed.score.score > bestObservedScore) {
+      bestObservedCandidate = observed;
+      bestObservedScore = observed.score.score;
+    }
     const best = pickBestLinkedInMatch(results, directorName, city, company.company_name);
     if (best) {
       if (opts.debug) {
@@ -688,6 +765,10 @@ export async function processEnrichment(
           has_linkedin: true,
           contact_confidence: normalizeConfidenceScore(confidence),
           contact_source: "serper_search",
+          search_confidence_score: toScorePercent(best.score.score),
+          search_confidence_reasons: best.score.reasons,
+          search_disqualified: false,
+          search_disqualify_reason: null,
         })
         .eq("company_number", item.company_number);
       if (error) throw error;
@@ -700,6 +781,7 @@ export async function processEnrichment(
     }
   }
 
+  await updateCompanySearchDiagnostics(item.company_number, bestObservedCandidate);
   await markQueueFailed(item.company_number, currentAttempts + usedSearches);
   return { status: "failed", reason: "no_usable_search_results", searchesUsed: usedSearches };
 }

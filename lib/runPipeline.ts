@@ -21,6 +21,10 @@ export type PipelineRow = {
   website_url?: string | null;
   contact_confidence?: number | null;
   contact_source?: string | null;
+  search_confidence_score?: number | null;
+  search_confidence_reasons?: string[] | null;
+  search_disqualified?: boolean | null;
+  search_disqualify_reason?: string | null;
 };
 
 export type PipelineResult = {

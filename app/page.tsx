@@ -18,9 +18,8 @@ type OfficerAppointment = {
 };
 
 type TimeWindow = "today" | "24h" | "6h" | "60m" | "30m";
-type SortOrder = "freshest" | "date_asc";
+type SortOrder = "freshest" | "date_asc" | "confidence_desc";
 type PreviousAppointmentsFilter = "any" | "yes" | "no";
-type LeadFilter = "all" | "likely";
 
 function toCsvCell(value: string | number | boolean | null | undefined): string {
   const raw = value == null ? "" : String(value);
@@ -45,6 +44,10 @@ function exportRowsToCsv(rows: PipelineRow[]): void {
     "website_url",
     "contact_confidence",
     "contact_source",
+    "search_confidence_score",
+    "search_confidence_reasons",
+    "search_disqualified",
+    "search_disqualify_reason",
   ];
   const lines = [
     headers.join(","),
@@ -65,6 +68,10 @@ function exportRowsToCsv(rows: PipelineRow[]): void {
         row.website_url ?? "",
         row.contact_confidence == null ? "" : row.contact_confidence,
         row.contact_source ?? "",
+        row.search_confidence_score == null ? "" : row.search_confidence_score,
+        (row.search_confidence_reasons || []).join("|"),
+        row.search_disqualified == null ? "" : row.search_disqualified,
+        row.search_disqualify_reason ?? "",
       ]
         .map((v) => toCsvCell(v))
         .join(",")
@@ -104,15 +111,13 @@ function rowMatchesSicFilter(row: PipelineRow, sicFilter: string): boolean {
 
 function buildGoogleCompanySearchUrl(row: PipelineRow): string {
   const directors = parseDirectorsDetail(row.directors_detail);
-  const firstDirector = (directors[0]?.name || "").trim();
+  const firstDirector = (directors[0]?.name || row.directors || "").trim();
   const parts = [
-    row.company_name,
-    row.company_number,
-    "uk company",
     firstDirector,
-    row.registered_office_address,
+    row.company_name,
+    "UK",
     "linkedin",
-    "contact",
+    "director",
   ]
     .map((p) => (p || "").trim())
     .filter(Boolean);
@@ -218,18 +223,23 @@ function rowMatchesPreviousAppointmentsFilter(
   return hasPrevious === false;
 }
 
-function rowIsLikelyCompany(row: PipelineRow): boolean {
-  if (row.has_linkedin) return true;
-  if ((row.linkedin_url || "").trim()) return true;
-  if ((row.website_url || "").trim()) return true;
-  if (typeof row.contact_confidence === "number" && row.contact_confidence >= 0.6) return true;
-  return false;
+function rowConfidencePercent(row: PipelineRow): number | null {
+  if (typeof row.search_confidence_score === "number") {
+    return Math.max(0, Math.min(100, Math.round(row.search_confidence_score)));
+  }
+  if (typeof row.contact_confidence === "number") {
+    const value =
+      row.contact_confidence <= 1
+        ? Math.round(row.contact_confidence * 100)
+        : Math.round(row.contact_confidence);
+    return Math.max(0, Math.min(100, value));
+  }
+  return null;
 }
 
 function rowIsHotLead(row: PipelineRow): boolean {
-  if (row.has_linkedin) return true;
-  if ((row.linkedin_url || "").trim()) return true;
-  return typeof row.contact_confidence === "number" && row.contact_confidence >= 0.8;
+  const confidence = rowConfidencePercent(row);
+  return confidence !== null && confidence >= 70;
 }
 
 function freshnessBadgeLabel(row: PipelineRow, nowMs: number): string | null {
@@ -243,6 +253,27 @@ function freshnessBadgeLabel(row: PipelineRow, nowMs: number): string | null {
   return null;
 }
 
+function incorporatedAgoLabel(row: PipelineRow, nowMs: number): string | null {
+  const ts = rowReferenceMs(row);
+  if (ts === null || ts > nowMs) return null;
+  const ageMinutes = Math.floor((nowMs - ts) / (60 * 1000));
+  if (ageMinutes < 60) {
+    const mins = Math.max(1, ageMinutes);
+    return `Incorporated ${mins} min${mins === 1 ? "" : "s"} ago`;
+  }
+  const ageHours = Math.floor(ageMinutes / 60);
+  if (ageHours < 24) {
+    return `Incorporated ${ageHours} hr${ageHours === 1 ? "" : "s"} ago`;
+  }
+  return null;
+}
+
+function isVeryFresh(row: PipelineRow, nowMs: number): boolean {
+  const ts = rowReferenceMs(row);
+  if (ts === null || ts > nowMs) return false;
+  return nowMs - ts <= 30 * 60 * 1000;
+}
+
 export default function DashboardPage() {
   const [data, setData] = useState<PipelineResult | null>(null);
   const [loading, setLoading] = useState(true);
@@ -252,7 +283,6 @@ export default function DashboardPage() {
   const [sortOrder, setSortOrder] = useState<SortOrder>("freshest");
   const [previousAppointmentsFilter, setPreviousAppointmentsFilter] =
     useState<PreviousAppointmentsFilter>("any");
-  const [leadFilter, setLeadFilter] = useState<LeadFilter>("all");
   const [previousAppointmentsByOfficer, setPreviousAppointmentsByOfficer] = useState<
     Record<string, number>
   >({});
@@ -278,8 +308,15 @@ export default function DashboardPage() {
           previousAppointmentsByOfficer
         )
       )
-      .filter((row) => (leadFilter === "likely" ? rowIsLikelyCompany(row) : true))
       .sort((a, b) => {
+        if (sortOrder === "confidence_desc") {
+          const aConf = rowConfidencePercent(a) ?? -1;
+          const bConf = rowConfidencePercent(b) ?? -1;
+          if (aConf !== bConf) return bConf - aConf;
+          const aTs = rowReferenceMs(a) ?? 0;
+          const bTs = rowReferenceMs(b) ?? 0;
+          return bTs - aTs;
+        }
         if (sortOrder === "date_asc") {
           const aDate = parseIncorporationDateOnly(a.incorporation_date) || "";
           const bDate = parseIncorporationDateOnly(b.incorporation_date) || "";
@@ -299,7 +336,6 @@ export default function DashboardPage() {
     sortOrder,
     previousAppointmentsFilter,
     previousAppointmentsByOfficer,
-    leadFilter,
   ]);
 
   useEffect(() => {
@@ -445,6 +481,7 @@ export default function DashboardPage() {
               >
                 <option value="freshest">Freshest first</option>
                 <option value="date_asc">Date ascending</option>
+                <option value="confidence_desc">Confidence (high to low)</option>
               </select>
               <label className="text-sm font-medium text-slate-700">
                 Previous appointments:
@@ -461,15 +498,6 @@ export default function DashboardPage() {
                 <option value="any">Any</option>
                 <option value="yes">Yes</option>
                 <option value="no">No</option>
-              </select>
-              <label className="text-sm font-medium text-slate-700">Lead filter:</label>
-              <select
-                value={leadFilter}
-                onChange={(e) => setLeadFilter(e.target.value as LeadFilter)}
-                className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              >
-                <option value="all">All companies</option>
-                <option value="likely">Likely companies</option>
               </select>
               <span className="text-sm text-slate-500">
                 Showing {filteredRows.length} of {data.rows.length} companies
@@ -511,8 +539,8 @@ export default function DashboardPage() {
                     <th className="w-[8%] px-4 py-3 font-medium">Type</th>
                     <th className="w-[18%] px-4 py-3 font-medium">Registered Office</th>
                     <th className="w-[20%] px-4 py-3 font-medium">Directors</th>
-                    <th className="w-[5%] px-4 py-3 font-medium">LinkedIn</th>
-                    <th className="w-[7%] px-4 py-3 font-medium">Search</th>
+                    <th className="w-[7%] px-4 py-3 font-medium">Confidence</th>
+                    <th className="w-[7%] px-4 py-3 font-medium">Open</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -528,6 +556,13 @@ export default function DashboardPage() {
                         <td className="px-4 py-3 align-top whitespace-normal break-words text-slate-800">
                           <div className="flex flex-wrap items-center gap-2">
                             <span>{row.company_name}</span>
+                            {isVeryFresh(row, renderNowMs) && (
+                              <span
+                                className="inline-block h-2 w-2 rounded-full bg-emerald-500"
+                                title="Incorporated within the last 30 minutes"
+                                aria-label="Very fresh incorporation"
+                              />
+                            )}
                             {(() => {
                               const label = freshnessBadgeLabel(row, renderNowMs);
                               if (!label) return null;
@@ -548,7 +583,14 @@ export default function DashboardPage() {
                           {row.company_number}
                         </td>
                         <td className="px-4 py-3 align-top whitespace-normal break-words text-slate-700">
-                          {row.incorporation_date}
+                          <div className="flex flex-col gap-1">
+                            <span>{row.incorporation_date}</span>
+                            {(() => {
+                              const ago = incorporatedAgoLabel(row, renderNowMs);
+                              if (!ago) return null;
+                              return <span className="text-xs text-slate-500">{ago}</span>;
+                            })()}
+                          </div>
                         </td>
                         <td className="px-4 py-3 align-top whitespace-normal break-words text-slate-700">
                           {row.sic_codes || "—"}
@@ -581,27 +623,21 @@ export default function DashboardPage() {
                           </div>
                         </td>
                         <td className="px-4 py-3 align-top whitespace-normal break-words text-slate-700">
-                          {row.linkedin_url ? (
-                            <a
-                              href={row.linkedin_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-blue-600 hover:underline"
-                            >
-                              Open
-                            </a>
-                          ) : (
-                            "—"
-                          )}
+                          {(() => {
+                            const confidence = rowConfidencePercent(row);
+                            if (confidence === null) return "—";
+                            return `${confidence}%`;
+                          })()}
                         </td>
                         <td className="px-4 py-3 align-top text-slate-700">
                           <button
                             type="button"
-                            aria-label={`Search ${row.company_name} on Google`}
-                            title="Search company on Google"
-                            onClick={() =>
-                              window.open(buildGoogleCompanySearchUrl(row), "_blank", "noopener,noreferrer")
-                            }
+                            aria-label={`Open link for ${row.company_name}`}
+                            title={row.linkedin_url ? "Open LinkedIn profile" : "Search company on Google"}
+                            onClick={() => {
+                              const targetUrl = row.linkedin_url || buildGoogleCompanySearchUrl(row);
+                              window.open(targetUrl, "_blank", "noopener,noreferrer");
+                            }}
                             className="inline-flex h-8 w-8 items-center justify-center rounded border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
                           >
                             <svg

@@ -21,6 +21,10 @@ type CompanyDbRow = {
   website_url: string | null;
   contact_confidence: number | null;
   contact_source: string | null;
+  search_confidence_score: number | null;
+  search_confidence_reasons: string[] | null;
+  search_disqualified: boolean | null;
+  search_disqualify_reason: string | null;
 };
 
 function toPipelineRow(row: CompanyDbRow): PipelineRow {
@@ -41,6 +45,10 @@ function toPipelineRow(row: CompanyDbRow): PipelineRow {
     website_url: row.website_url,
     contact_confidence: row.contact_confidence,
     contact_source: row.contact_source,
+    search_confidence_score: row.search_confidence_score,
+    search_confidence_reasons: row.search_confidence_reasons,
+    search_disqualified: row.search_disqualified,
+    search_disqualify_reason: row.search_disqualify_reason,
   };
 }
 
@@ -52,7 +60,7 @@ export async function GET() {
       supabase
         .from("companies")
         .select(
-          "company_name, company_number, incorporation_date, first_seen_at, has_previous_appointments, previous_appointments_count, sic_codes, company_type, registered_office_address, directors, directors_detail, has_linkedin, linkedin_url, website_url, contact_confidence, contact_source"
+          "company_name, company_number, incorporation_date, first_seen_at, has_previous_appointments, previous_appointments_count, sic_codes, company_type, registered_office_address, directors, directors_detail, has_linkedin, linkedin_url, website_url, contact_confidence, contact_source, search_confidence_score, search_confidence_reasons, search_disqualified, search_disqualify_reason"
         )
         .order("last_seen_at", { ascending: false }),
       supabase
