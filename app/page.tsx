@@ -20,6 +20,7 @@ type OfficerAppointment = {
 type TimeWindow = "today" | "24h" | "6h" | "60m" | "30m";
 type SortOrder = "freshest" | "date_asc";
 type PreviousAppointmentsFilter = "any" | "yes" | "no";
+type LeadFilter = "all" | "likely";
 
 function toCsvCell(value: string | number | boolean | null | undefined): string {
   const raw = value == null ? "" : String(value);
@@ -41,6 +42,9 @@ function exportRowsToCsv(rows: PipelineRow[]): void {
     "previous_appointments_count",
     "has_linkedin",
     "linkedin_url",
+    "website_url",
+    "contact_confidence",
+    "contact_source",
   ];
   const lines = [
     headers.join(","),
@@ -58,6 +62,9 @@ function exportRowsToCsv(rows: PipelineRow[]): void {
         row.previous_appointments_count == null ? "" : row.previous_appointments_count,
         row.has_linkedin,
         row.linkedin_url ?? "",
+        row.website_url ?? "",
+        row.contact_confidence == null ? "" : row.contact_confidence,
+        row.contact_source ?? "",
       ]
         .map((v) => toCsvCell(v))
         .join(",")
@@ -211,6 +218,20 @@ function rowMatchesPreviousAppointmentsFilter(
   return hasPrevious === false;
 }
 
+function rowIsLikelyCompany(row: PipelineRow): boolean {
+  if (row.has_linkedin) return true;
+  if ((row.linkedin_url || "").trim()) return true;
+  if ((row.website_url || "").trim()) return true;
+  if (typeof row.contact_confidence === "number" && row.contact_confidence >= 0.6) return true;
+  return false;
+}
+
+function rowIsHotLead(row: PipelineRow): boolean {
+  if (row.has_linkedin) return true;
+  if ((row.linkedin_url || "").trim()) return true;
+  return typeof row.contact_confidence === "number" && row.contact_confidence >= 0.8;
+}
+
 function freshnessBadgeLabel(row: PipelineRow, nowMs: number): string | null {
   const ts = rowReferenceMs(row);
   if (ts === null || ts > nowMs) return null;
@@ -231,6 +252,7 @@ export default function DashboardPage() {
   const [sortOrder, setSortOrder] = useState<SortOrder>("freshest");
   const [previousAppointmentsFilter, setPreviousAppointmentsFilter] =
     useState<PreviousAppointmentsFilter>("any");
+  const [leadFilter, setLeadFilter] = useState<LeadFilter>("all");
   const [previousAppointmentsByOfficer, setPreviousAppointmentsByOfficer] = useState<
     Record<string, number>
   >({});
@@ -256,6 +278,7 @@ export default function DashboardPage() {
           previousAppointmentsByOfficer
         )
       )
+      .filter((row) => (leadFilter === "likely" ? rowIsLikelyCompany(row) : true))
       .sort((a, b) => {
         if (sortOrder === "date_asc") {
           const aDate = parseIncorporationDateOnly(a.incorporation_date) || "";
@@ -269,7 +292,15 @@ export default function DashboardPage() {
         const bTs = rowReferenceMs(b) ?? 0;
         return bTs - aTs;
       });
-  }, [data?.rows, sicFilter, timeWindow, sortOrder, previousAppointmentsFilter, previousAppointmentsByOfficer]);
+  }, [
+    data?.rows,
+    sicFilter,
+    timeWindow,
+    sortOrder,
+    previousAppointmentsFilter,
+    previousAppointmentsByOfficer,
+    leadFilter,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -431,6 +462,15 @@ export default function DashboardPage() {
                 <option value="yes">Yes</option>
                 <option value="no">No</option>
               </select>
+              <label className="text-sm font-medium text-slate-700">Lead filter:</label>
+              <select
+                value={leadFilter}
+                onChange={(e) => setLeadFilter(e.target.value as LeadFilter)}
+                className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              >
+                <option value="all">All companies</option>
+                <option value="likely">Likely companies</option>
+              </select>
               <span className="text-sm text-slate-500">
                 Showing {filteredRows.length} of {data.rows.length} companies
               </span>
@@ -464,13 +504,14 @@ export default function DashboardPage() {
               <table className="min-w-full table-fixed text-sm">
                 <thead className="bg-slate-100 text-left text-slate-700">
                   <tr>
-                    <th className="w-[15%] px-4 py-3 font-medium">Company</th>
+                    <th className="w-[14%] px-4 py-3 font-medium">Company</th>
                     <th className="w-[10%] px-4 py-3 font-medium">Number</th>
                     <th className="w-[10%] px-4 py-3 font-medium">Incorporated</th>
                     <th className="w-[8%] px-4 py-3 font-medium">SIC Codes</th>
                     <th className="w-[8%] px-4 py-3 font-medium">Type</th>
-                    <th className="w-[20%] px-4 py-3 font-medium">Registered Office</th>
-                    <th className="w-[22%] px-4 py-3 font-medium">Directors</th>
+                    <th className="w-[18%] px-4 py-3 font-medium">Registered Office</th>
+                    <th className="w-[20%] px-4 py-3 font-medium">Directors</th>
+                    <th className="w-[5%] px-4 py-3 font-medium">LinkedIn</th>
                     <th className="w-[7%] px-4 py-3 font-medium">Search</th>
                   </tr>
                 </thead>
@@ -496,6 +537,11 @@ export default function DashboardPage() {
                                 </span>
                               );
                             })()}
+                            {rowIsHotLead(row) && (
+                              <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-700">
+                                HOT LEAD
+                              </span>
+                            )}
                           </div>
                         </td>
                         <td className="px-4 py-3 align-top whitespace-normal break-words text-slate-700">
@@ -533,6 +579,20 @@ export default function DashboardPage() {
                                 ))
                               : row.directors}
                           </div>
+                        </td>
+                        <td className="px-4 py-3 align-top whitespace-normal break-words text-slate-700">
+                          {row.linkedin_url ? (
+                            <a
+                              href={row.linkedin_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-blue-600 hover:underline"
+                            >
+                              Open
+                            </a>
+                          ) : (
+                            "—"
+                          )}
                         </td>
                         <td className="px-4 py-3 align-top text-slate-700">
                           <button

@@ -18,6 +18,9 @@ type CompanyDbRow = {
   directors_detail: string | null;
   has_linkedin: boolean | null;
   linkedin_url: string | null;
+  website_url: string | null;
+  contact_confidence: number | null;
+  contact_source: string | null;
 };
 
 function toPipelineRow(row: CompanyDbRow): PipelineRow {
@@ -35,6 +38,9 @@ function toPipelineRow(row: CompanyDbRow): PipelineRow {
     directors_detail: row.directors_detail ?? "[]",
     has_linkedin: Boolean(row.has_linkedin),
     linkedin_url: row.linkedin_url,
+    website_url: row.website_url,
+    contact_confidence: row.contact_confidence,
+    contact_source: row.contact_source,
   };
 }
 
@@ -46,7 +52,7 @@ export async function GET() {
       supabase
         .from("companies")
         .select(
-          "company_name, company_number, incorporation_date, first_seen_at, has_previous_appointments, previous_appointments_count, sic_codes, company_type, registered_office_address, directors, directors_detail, has_linkedin, linkedin_url"
+          "company_name, company_number, incorporation_date, first_seen_at, has_previous_appointments, previous_appointments_count, sic_codes, company_type, registered_office_address, directors, directors_detail, has_linkedin, linkedin_url, website_url, contact_confidence, contact_source"
         )
         .order("last_seen_at", { ascending: false }),
       supabase

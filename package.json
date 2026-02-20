@@ -10,7 +10,8 @@
     "lint": "next lint",
     "ingest:once": "node --loader ts-node/esm scripts/ingest.ts",
     "ingest:loop": "while true; do npm run ingest:once; sleep 300; done",
-    "backfill:previous": "node --loader ts-node/esm scripts/backfillPreviousAppointments.ts"
+    "backfill:previous": "node --loader ts-node/esm scripts/backfillPreviousAppointments.ts",
+    "enrich:once": "node --loader ts-node/esm scripts/enrichmentCron.ts"
   },
   "keywords": [],
   "author": "",

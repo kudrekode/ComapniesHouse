@@ -18,6 +18,9 @@ export type PipelineRow = {
   directors_detail?: string;
   has_linkedin: boolean;
   linkedin_url: string | null;
+  website_url?: string | null;
+  contact_confidence?: number | null;
+  contact_source?: string | null;
 };
 
 export type PipelineResult = {
