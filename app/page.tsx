@@ -21,6 +21,62 @@ type TimeWindow = "today" | "24h" | "6h" | "60m" | "30m";
 type SortOrder = "freshest" | "date_asc";
 type PreviousAppointmentsFilter = "any" | "yes" | "no";
 
+function toCsvCell(value: string | number | boolean | null | undefined): string {
+  const raw = value == null ? "" : String(value);
+  const escaped = raw.replace(/"/g, '""');
+  return `"${escaped}"`;
+}
+
+function exportRowsToCsv(rows: PipelineRow[]): void {
+  const headers = [
+    "company_name",
+    "company_number",
+    "incorporation_date",
+    "first_seen_at",
+    "sic_codes",
+    "company_type",
+    "registered_office_address",
+    "directors",
+    "has_previous_appointments",
+    "previous_appointments_count",
+    "has_linkedin",
+    "linkedin_url",
+  ];
+  const lines = [
+    headers.join(","),
+    ...rows.map((row) =>
+      [
+        row.company_name,
+        row.company_number,
+        row.incorporation_date,
+        row.first_seen_at ?? "",
+        row.sic_codes,
+        row.company_type,
+        row.registered_office_address,
+        row.directors,
+        row.has_previous_appointments == null ? "" : row.has_previous_appointments,
+        row.previous_appointments_count == null ? "" : row.previous_appointments_count,
+        row.has_linkedin,
+        row.linkedin_url ?? "",
+      ]
+        .map((v) => toCsvCell(v))
+        .join(",")
+    ),
+  ];
+
+  const csv = `${lines.join("\n")}\n`;
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `companies-view-${timestamp}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 function parseDirectorsDetail(directors_detail: string | undefined): DirectorDetail[] {
   if (!directors_detail || typeof directors_detail !== "string") return [];
   try {
@@ -80,6 +136,14 @@ function parseFirstSeenMs(value: string | undefined): number | null {
   return Number.isNaN(parsed) ? null : parsed;
 }
 
+function toLocalDateOnly(ms: number): string {
+  const d = new Date(ms);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 function rowReferenceMs(row: PipelineRow): number | null {
   const firstSeen = parseFirstSeenMs(row.first_seen_at);
   if (firstSeen !== null) return firstSeen;
@@ -94,7 +158,11 @@ function rowIsWithinTimeWindow(row: PipelineRow, window: TimeWindow, nowMs: numb
   if (ts === null) return false;
 
   if (window === "today") {
-    const today = new Date(nowMs).toISOString().slice(0, 10);
+    const firstSeen = parseFirstSeenMs(row.first_seen_at);
+    if (firstSeen !== null) {
+      return toLocalDateOnly(firstSeen) === toLocalDateOnly(nowMs);
+    }
+    const today = toLocalDateOnly(nowMs);
     const incorporationDateOnly = parseIncorporationDateOnly(row.incorporation_date);
     if (incorporationDateOnly) return incorporationDateOnly === today;
     return ts <= nowMs;
@@ -204,25 +272,37 @@ export default function DashboardPage() {
   }, [data?.rows, sicFilter, timeWindow, sortOrder, previousAppointmentsFilter, previousAppointmentsByOfficer]);
 
   useEffect(() => {
-    const load = async () => {
+    let cancelled = false;
+
+    const load = async (initialLoad: boolean) => {
       try {
-        setLoading(true);
-        setError(null);
+        if (initialLoad) setLoading(true);
         const res = await fetch("/api/run", { cache: "no-store" });
         const json = await res.json();
         if (!res.ok) {
           const msg = json?.error ?? `Request failed (${res.status})`;
           throw new Error(msg);
         }
+        if (cancelled) return;
         setData(json as PipelineResult);
+        setError(null);
       } catch (err) {
+        if (cancelled) return;
         setError(err instanceof Error ? err.message : "Unknown error");
       } finally {
-        setLoading(false);
+        if (!cancelled && initialLoad) setLoading(false);
       }
     };
 
-    void load();
+    void load(true);
+    const intervalId = window.setInterval(() => {
+      void load(false);
+    }, 5 * 60 * 1000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
   }, []);
 
   useEffect(() => {
@@ -354,6 +434,30 @@ export default function DashboardPage() {
               <span className="text-sm text-slate-500">
                 Showing {filteredRows.length} of {data.rows.length} companies
               </span>
+              <button
+                type="button"
+                title="Export current view to CSV"
+                aria-label="Export current view to CSV"
+                onClick={() => exportRowsToCsv(filteredRows)}
+                className="inline-flex h-8 w-8 items-center justify-center rounded border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={filteredRows.length === 0}
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="h-4 w-4"
+                  aria-hidden="true"
+                >
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="7 10 12 15 17 10" />
+                  <line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
+              </button>
             </div>
 
             <div className="mt-6 overflow-x-auto rounded-lg border border-slate-200 bg-white shadow-sm">
