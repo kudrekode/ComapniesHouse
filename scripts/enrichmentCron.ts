@@ -55,6 +55,30 @@ function normalizeText(input: string): string {
   return input.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
+function toNameCase(input: string): string {
+  return input
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b([a-z])/g, (m) => m.toUpperCase());
+}
+
+export function normalizeDirectorNameForSearch(rawName: string): string {
+  const cleaned = String(rawName || "").replace(/\s+/g, " ").trim();
+  if (!cleaned) return "";
+  if (!cleaned.includes(",")) return toNameCase(cleaned);
+
+  const parts = cleaned
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (parts.length < 2) return toNameCase(cleaned.replace(",", " "));
+
+  const surname = parts[0] || "";
+  const givenNames = parts.slice(1).join(" ");
+  return toNameCase(`${givenNames} ${surname}`.trim());
+}
+
 function normalizeConfidenceScore(score: number): number {
   const mode = String(process.env.CONTACT_CONFIDENCE_MODE || "percent").toLowerCase();
   if (mode === "fraction") return score;
@@ -333,10 +357,18 @@ export async function processEnrichment(
   const supabase = getSupabaseAdminClient();
   let usedSearches = 0;
 
-  const directorName = extractDirectorName(company);
+  const originalDirectorName = extractDirectorName(company);
+  const directorName = originalDirectorName
+    ? normalizeDirectorNameForSearch(originalDirectorName)
+    : null;
   const city = extractCity(company.registered_office_address);
   if (directorName && city && currentAttempts + usedSearches < MAX_SEARCHES_PER_COMPANY) {
     const query = `"${directorName}" "${city}" site:linkedin.com`;
+    if (opts.debug) {
+      console.log(
+        `[EnrichmentCron][Debug] ${item.company_number} original_director_name="${originalDirectorName || ""}" normalized_director_name="${directorName}" final_query="${query}"`
+      );
+    }
     const results = await searchSerper(query, {
       debug: opts.debug,
       companyNumber: item.company_number,
