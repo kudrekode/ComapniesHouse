@@ -1,6 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdminClient } from "../../../../../lib/supabaseAdmin";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+export const fetchCache = "force-no-store";
+
+const NO_STORE_HEADERS = {
+  "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0, s-maxage=0",
+  Pragma: "no-cache",
+  Expires: "0",
+};
+
 export async function GET(
   _request: NextRequest,
   context: { params: { officerId: string } }
@@ -9,7 +19,7 @@ export async function GET(
   if (!officerId) {
     return NextResponse.json(
       { error: "Missing officer ID" },
-      { status: 400 }
+      { status: 400, headers: NO_STORE_HEADERS }
     );
   }
 
@@ -26,7 +36,10 @@ export async function GET(
       try {
         const appointments = JSON.parse(cached.data.value || "[]");
         if (Array.isArray(appointments)) {
-          return NextResponse.json({ appointments, source: "db-cache" }, { status: 200 });
+          return NextResponse.json(
+            { appointments, source: "db-cache" },
+            { status: 200, headers: NO_STORE_HEADERS }
+          );
         }
       } catch {
         // malformed cache; return empty below
@@ -35,13 +48,13 @@ export async function GET(
 
     return NextResponse.json(
       { appointments: [], source: "db-miss" },
-      { status: 200 }
+      { status: 200, headers: NO_STORE_HEADERS }
     );
   } catch (error) {
     console.error("Officer appointments failed:", error);
     return NextResponse.json(
       { error: "Failed to load officer appointments" },
-      { status: 500 }
+      { status: 500, headers: NO_STORE_HEADERS }
     );
   }
 }

@@ -449,7 +449,7 @@ export default function DashboardPage() {
           <>
             <p className="mt-4 text-sm text-slate-600">
               Last updated: {new Date(data.updatedAt).toLocaleString()} | Data refreshes every 5
-              min, cache TTL 24h | Hot lead = high-confidence LinkedIn match
+              min | Data retention: 24h | Hot lead = high-confidence LinkedIn match
             </p>
 
             <div className="mt-4 flex flex-wrap items-center gap-3">
