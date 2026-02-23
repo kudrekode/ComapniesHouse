@@ -3,6 +3,14 @@ import { getSupabaseAdminClient } from "../../../lib/supabaseAdmin";
 import type { PipelineResult, PipelineRow } from "../../../lib/runPipeline";
 
 export const dynamic = "force-dynamic";
+export const revalidate = 0;
+export const fetchCache = "force-no-store";
+
+const NO_STORE_HEADERS = {
+  "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0, s-maxage=0",
+  Pragma: "no-cache",
+  Expires: "0",
+};
 
 type CompanyDbRow = {
   company_name: string;
@@ -77,12 +85,12 @@ export async function GET() {
     const updatedAt = stateResult.data?.value || new Date().toISOString();
     const result: PipelineResult = { updatedAt, rows };
 
-    return NextResponse.json(result, { status: 200 });
+    return NextResponse.json(result, { status: 200, headers: NO_STORE_HEADERS });
   } catch (error) {
     console.error("DB read failed:", error);
     return NextResponse.json(
       { error: "Failed to load dashboard data" },
-      { status: 500 }
+      { status: 500, headers: NO_STORE_HEADERS }
     );
   }
 }
