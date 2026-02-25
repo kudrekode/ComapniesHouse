@@ -154,14 +154,24 @@ export class CompaniesHouseClient {
     const pageSize = 100;
 
     while (true) {
-      const response = await this.requestWithRetry<OfficersListResponse>({
-        method: "GET",
-        url: `/company/${encodeURIComponent(companyNumber)}/officers`,
-        params: {
-          items_per_page: pageSize,
-          start_index: startIndex,
-        },
-      });
+      let response: AxiosResponse<OfficersListResponse>;
+      try {
+        response = await this.requestWithRetry<OfficersListResponse>({
+          method: "GET",
+          url: `/company/${encodeURIComponent(companyNumber)}/officers`,
+          params: {
+            items_per_page: pageSize,
+            start_index: startIndex,
+          },
+        });
+      } catch (err: any) {
+        // Some freshly-created companies transiently return 404 for officers.
+        // Treat as no officers yet instead of failing the whole pipeline.
+        if (err?.response?.status === 404) {
+          return [];
+        }
+        throw err;
+      }
 
       const items = response.data.items ?? [];
       results.push(...items);

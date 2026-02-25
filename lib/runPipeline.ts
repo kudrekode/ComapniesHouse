@@ -272,7 +272,15 @@ export async function runPipeline(options: RunPipelineOptions = {}): Promise<Pip
   const rows: PipelineRow[] = await Promise.all(
     selectedCompanies.map((company) =>
       limiter(async () => {
-        const officers = await client.getCompanyOfficers(company.company_number);
+        let officers: OfficerItem[] = [];
+        try {
+          officers = await client.getCompanyOfficers(company.company_number);
+        } catch (error) {
+          console.error(
+            `[Pipeline] Failed to fetch officers for ${company.company_number}:`,
+            error
+          );
+        }
         officersDone += 1;
         if (officersDone % OFFICERS_PROGRESS_LOG_EVERY === 0) {
           console.log(`[Pipeline] Officers: ${officersDone}/${totalOfficers} done`);
