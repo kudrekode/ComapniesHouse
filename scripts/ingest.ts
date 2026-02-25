@@ -636,18 +636,19 @@ async function backfillRecentDirectors(nowMs: number, nowIso: string): Promise<v
   );
 
   const supabase = getSupabaseAdminClient();
-  const payload = enriched.map((row) => ({
-    company_number: row.company_number,
-    directors: row.directors,
-    directors_detail: row.directors_detail,
-    has_previous_appointments: row.has_previous_appointments,
-    previous_appointments_count: row.previous_appointments_count,
-    last_seen_at: nowIso,
-  }));
-  const { error } = await supabase
-    .from("companies")
-    .upsert(payload, { onConflict: "company_number" });
-  if (error) throw error;
+  for (const row of enriched) {
+    const { error } = await supabase
+      .from("companies")
+      .update({
+        directors: row.directors,
+        directors_detail: row.directors_detail,
+        has_previous_appointments: row.has_previous_appointments,
+        previous_appointments_count: row.previous_appointments_count,
+        last_seen_at: nowIso,
+      })
+      .eq("company_number", row.company_number);
+    if (error) throw error;
+  }
   const { error: queueRefreshError } = await supabase.rpc("refresh_enrichment_queue");
   if (queueRefreshError) throw queueRefreshError;
 
