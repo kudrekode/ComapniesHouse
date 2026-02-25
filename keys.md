@@ -4,4 +4,7 @@ $env:OUTPUT_CSV="companies.csv"   # optional
 $env:CONCURRENCY="4"             # optional
 $env:MAX_COMPANIES="0"           # optional; 0 = no limit (bring in all that match filters)
 $env:MAX_COMPANIES_TO_CHECK="0"   # optional; 0 = no limit (all companies). Use e.g. 500 as safety cap per 5-min run.
+$env:DIRECTOR_BACKFILL_WINDOW_MINUTES="60" # optional; only recheck recent companies with empty directors
+$env:DIRECTOR_BACKFILL_MAX_PER_RUN="150"   # optional; cap director rechecks each ingest run
+$env:DIRECTOR_BACKFILL_CONCURRENCY="4"     # optional; concurrency for director rechecks
 npm start

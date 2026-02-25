@@ -3,7 +3,7 @@ import { runPipeline } from "../lib/runPipeline.js";
 import { getSupabaseAdminClient } from "../lib/supabaseAdmin.js";
 import { CompaniesHouseClient } from "../companiesHouseClient.js";
 import type { PipelineRow, DirectorDetail } from "../lib/runPipeline.js";
-import type { OfficerAppointmentItem } from "../companiesHouseClient.js";
+import type { OfficerAppointmentItem, OfficerItem } from "../companiesHouseClient.js";
 
 const { loadEnvConfig } = nextEnv;
 loadEnvConfig(process.cwd());
@@ -35,6 +35,18 @@ const SUMMARY_BACKFILL_COMPANY_LIMIT = Number.parseInt(
   process.env.SUMMARY_BACKFILL_COMPANY_LIMIT || "500",
   10
 );
+const DIRECTOR_BACKFILL_WINDOW_MINUTES = Number.parseInt(
+  process.env.DIRECTOR_BACKFILL_WINDOW_MINUTES || "60",
+  10
+);
+const DIRECTOR_BACKFILL_MAX_PER_RUN = Number.parseInt(
+  process.env.DIRECTOR_BACKFILL_MAX_PER_RUN || "150",
+  10
+);
+const DIRECTOR_BACKFILL_CONCURRENCY = Number.parseInt(
+  process.env.DIRECTOR_BACKFILL_CONCURRENCY || process.env.CONCURRENCY || "4",
+  10
+);
 
 type OfficerSummary = {
   officer_id: string;
@@ -56,6 +68,20 @@ type RowWithDirectorsDetail = {
 type ExistingCompanySummaryRow = {
   company_number: string;
   directors_detail: string | null;
+};
+
+type CompanyMissingDirectorsRow = {
+  company_number: string;
+  company_name: string | null;
+  first_seen_at: string;
+  directors: string | null;
+  directors_detail: string | null;
+};
+
+type DirectorBackfillUpdate = {
+  company_number: string;
+  directors: string;
+  directors_detail: string;
 };
 
 function createConcurrencyLimiter(limit: number) {
@@ -97,6 +123,26 @@ function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < items.length; i += size) {
     out.push(items.slice(i, i + size));
+  }
+  return out;
+}
+
+function officerIdFromAppointmentsLink(link: string | undefined): string | null {
+  if (!link || typeof link !== "string") return null;
+  const match = link.match(/\/officers\/([^/]+)\/appointments\/?$/);
+  return match?.[1] ?? null;
+}
+
+function uniqueNonEmpty(values: (string | undefined)[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const v of values) {
+    const trimmed = String(v || "").trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
   }
   return out;
 }
@@ -454,6 +500,162 @@ async function upsertCompanies(nowIso: string, rows: Awaited<ReturnType<typeof r
   if (queueRefreshError) throw queueRefreshError;
 }
 
+function attachPreviousAppointmentsToDirectorBackfill(
+  rows: DirectorBackfillUpdate[],
+  officerSummaries: Map<string, OfficerSummary>
+): Array<{
+  company_number: string;
+  directors: string;
+  directors_detail: string;
+  has_previous_appointments: boolean | null;
+  previous_appointments_count: number | null;
+}> {
+  return rows.map((row) => {
+    const directors = parseDirectorsDetail(row.directors_detail);
+    if (directors.length === 0) {
+      return {
+        company_number: row.company_number,
+        directors: row.directors,
+        directors_detail: row.directors_detail,
+        has_previous_appointments: null,
+        previous_appointments_count: null,
+      };
+    }
+    let known = 0;
+    let previousCount = 0;
+    for (const d of directors) {
+      const summary = officerSummaries.get(d.officer_id);
+      if (!summary) continue;
+      known += 1;
+      if (summary.has_previous_appointments) previousCount += 1;
+    }
+    return {
+      company_number: row.company_number,
+      directors: row.directors,
+      directors_detail: row.directors_detail,
+      has_previous_appointments: known > 0 ? previousCount > 0 : null,
+      previous_appointments_count: known > 0 ? previousCount : null,
+    };
+  });
+}
+
+async function readRecentCompaniesMissingDirectors(
+  nowMs: number
+): Promise<CompanyMissingDirectorsRow[]> {
+  const supabase = getSupabaseAdminClient();
+  const windowMinutes =
+    Number.isFinite(DIRECTOR_BACKFILL_WINDOW_MINUTES) &&
+    DIRECTOR_BACKFILL_WINDOW_MINUTES > 0
+      ? DIRECTOR_BACKFILL_WINDOW_MINUTES
+      : 60;
+  const limit =
+    Number.isFinite(DIRECTOR_BACKFILL_MAX_PER_RUN) &&
+    DIRECTOR_BACKFILL_MAX_PER_RUN > 0
+      ? DIRECTOR_BACKFILL_MAX_PER_RUN
+      : 150;
+  const cutoffIso = new Date(nowMs - windowMinutes * 60 * 1000).toISOString();
+  const { data, error } = await supabase
+    .from("companies")
+    .select("company_number, company_name, first_seen_at, directors, directors_detail")
+    .gte("first_seen_at", cutoffIso)
+    .or("directors.is.null,directors.eq.")
+    .order("first_seen_at", { ascending: true })
+    .limit(limit);
+  if (error) throw error;
+  return (data || []) as CompanyMissingDirectorsRow[];
+}
+
+async function backfillRecentDirectors(nowMs: number, nowIso: string): Promise<void> {
+  const targets = await readRecentCompaniesMissingDirectors(nowMs);
+  if (targets.length === 0) {
+    console.log("[Ingest] Director backfill: no recent empty-director rows");
+    return;
+  }
+
+  const concurrency =
+    Number.isFinite(DIRECTOR_BACKFILL_CONCURRENCY) && DIRECTOR_BACKFILL_CONCURRENCY > 0
+      ? DIRECTOR_BACKFILL_CONCURRENCY
+      : 4;
+  const limiter = createConcurrencyLimiter(concurrency);
+  const chClient = new CompaniesHouseClient(process.env.COMPANIES_HOUSE_API_KEY || "");
+  const updates: DirectorBackfillUpdate[] = [];
+
+  await Promise.all(
+    targets.map((row) =>
+      limiter(async () => {
+        try {
+          const officers = await chClient.getCompanyOfficers(row.company_number);
+          const directors = officers.filter(
+            (o: OfficerItem) => (o.officer_role || "").toLowerCase() === "director"
+          );
+          if (directors.length === 0) return;
+          const directorNames = uniqueNonEmpty(directors.map((o) => o.name));
+          const details: DirectorDetail[] = directors
+            .map((o: OfficerItem) => {
+              const name = (o.name || "").trim();
+              const officerId = officerIdFromAppointmentsLink(
+                o.links?.officer?.appointments
+              );
+              if (!name || !officerId) return null;
+              return { name, officer_id: officerId };
+            })
+            .filter((d): d is DirectorDetail => d !== null);
+
+          updates.push({
+            company_number: row.company_number,
+            directors: directorNames.join(", "),
+            directors_detail: JSON.stringify(details),
+          });
+        } catch (error) {
+          console.error(
+            `[Ingest] Director backfill failed for ${row.company_number}:`,
+            error
+          );
+        }
+      })
+    )
+  );
+
+  if (updates.length === 0) {
+    console.log(
+      `[Ingest] Director backfill: checked ${targets.length}, recovered directors for 0`
+    );
+    return;
+  }
+
+  const officerIds = extractOfficerIds(updates);
+  const existingOfficerSummaries = await readOfficerSummaries(officerIds);
+  const updatedOfficerSummaries = await refreshOfficerSummaries(
+    officerIds,
+    existingOfficerSummaries,
+    nowMs
+  );
+  const enriched = attachPreviousAppointmentsToDirectorBackfill(
+    updates,
+    updatedOfficerSummaries
+  );
+
+  const supabase = getSupabaseAdminClient();
+  const payload = enriched.map((row) => ({
+    company_number: row.company_number,
+    directors: row.directors,
+    directors_detail: row.directors_detail,
+    has_previous_appointments: row.has_previous_appointments,
+    previous_appointments_count: row.previous_appointments_count,
+    last_seen_at: nowIso,
+  }));
+  const { error } = await supabase
+    .from("companies")
+    .upsert(payload, { onConflict: "company_number" });
+  if (error) throw error;
+  const { error: queueRefreshError } = await supabase.rpc("refresh_enrichment_queue");
+  if (queueRefreshError) throw queueRefreshError;
+
+  console.log(
+    `[Ingest] Director backfill: checked ${targets.length}, recovered directors for ${updates.length} companies`
+  );
+}
+
 async function pruneExpiredRows(nowMs: number): Promise<void> {
   const supabase = getSupabaseAdminClient();
   const cutoffIso = new Date(nowMs - RETENTION_MS).toISOString();
@@ -525,6 +727,7 @@ async function main(): Promise<void> {
       `[Ingest] Backfilled previous-appointment fields for ${updatedCompanies} companies`
     );
   }
+  await backfillRecentDirectors(nowMs, nowIso);
 
   await pruneExpiredRows(nowMs);
   await writeLastProcessedAt(nowIso);
