@@ -1,4 +1,5 @@
 import nextEnv from "@next/env";
+// comment
 import { getSupabaseAdminClient } from "../lib/supabaseAdmin.js";
 
 const { loadEnvConfig } = nextEnv;
