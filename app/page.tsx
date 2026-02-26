@@ -625,154 +625,186 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            <div className="mt-4 flex flex-wrap items-center gap-3">
-              <label className="text-sm font-medium text-slate-700">Filter by SIC code(s):</label>
-                <input
-                  type="text"
-                  placeholder="e.g. 62020, 70229 or 62010"
-                  value={sicFilter}
-                  onChange={(e) => {
-                    setSicFilter(e.target.value);
-                    setPage(1);
-                  }}
-                  className="rounded border border-slate-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                />
-              <label className="text-sm font-medium text-slate-700">Window:</label>
-              <select
-                value={timeWindow}
-                onChange={(e) => {
-                  setTimeWindow(e.target.value as TimeWindow);
-                  setPage(1);
-                }}
-                className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              >
-                <option value="today">Today (default)</option>
-                <option value="24h">Last 24 hours</option>
-                <option value="6h">Last 6 hours</option>
-                <option value="60m">Last 60 minutes</option>
-                <option value="30m">Last 30 minutes</option>
-              </select>
-              <label className="text-sm font-medium text-slate-700">Sort:</label>
-              <select
-                value={sortOrder}
-                onChange={(e) => {
-                  setSortOrder(e.target.value as SortOrder);
-                  setPage(1);
-                }}
-                className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              >
-                <option value="freshest">Freshest first</option>
-                <option value="date_asc">Date ascending</option>
-                <option value="confidence_desc">Confidence (high to low)</option>
-              </select>
-              <label className="text-sm font-medium text-slate-700">
-                Previous appointments:
-              </label>
-              <select
-                value={previousAppointmentsFilter}
-                onChange={(e) =>
-                  {
-                    setPreviousAppointmentsFilter(
-                      e.target.value as PreviousAppointmentsFilter
-                    );
-                    setPage(1);
-                  }
-                }
-                className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              >
-                <option value="any">Any</option>
-                <option value="yes">Yes</option>
-                <option value="no">No</option>
-              </select>
-              <span className="text-sm text-slate-500">
-                Showing page {data.page ?? page} of {data.totalPages ?? 1} | Rows on page{" "}
-                {visibleRows.length} | Filtered total {data.totalCount ?? visibleRows.length}
-                {typeof data.totalRows === "number" ? ` | Overall total ${data.totalRows}` : ""}
-              </span>
-              <button
-                type="button"
-                onClick={() => setPage((prev) => Math.max(1, prev - 1))}
-                disabled={(data.page ?? page) <= 1}
-                className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Prev page
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  setPage((prev) => Math.min(data.totalPages ?? 1, prev + 1))
-                }
-                disabled={(data.page ?? page) >= (data.totalPages ?? 1)}
-                className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Next page
-              </button>
-              <div className="relative" ref={exportMenuRef}>
-                <button
-                  type="button"
-                  title="Download options"
-                  aria-label="Download options"
-                  aria-haspopup="menu"
-                  aria-expanded={isExportMenuOpen}
-                  onClick={() => setIsExportMenuOpen((open) => !open)}
-                  className="inline-flex h-8 w-8 items-center justify-center rounded border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={visibleRows.length === 0}
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className="h-4 w-4"
-                    aria-hidden="true"
-                  >
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                    <polyline points="7 10 12 15 17 10" />
-                    <line x1="12" y1="15" x2="12" y2="3" />
-                  </svg>
-                </button>
-                {isExportMenuOpen && (
-                  <div
-                    role="menu"
-                    className="absolute right-0 z-20 mt-2 w-36 rounded-md border border-slate-200 bg-white p-1 shadow-lg"
-                  >
+            <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_auto]">
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <label className="flex flex-col gap-1">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      SIC code(s)
+                    </span>
+                    <input
+                      type="text"
+                      placeholder="e.g. 62020, 70229 or 62010"
+                      value={sicFilter}
+                      onChange={(e) => {
+                        setSicFilter(e.target.value);
+                        setPage(1);
+                      }}
+                      className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Window
+                    </span>
+                    <select
+                      value={timeWindow}
+                      onChange={(e) => {
+                        setTimeWindow(e.target.value as TimeWindow);
+                        setPage(1);
+                      }}
+                      className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    >
+                      <option value="today">Today (default)</option>
+                      <option value="24h">Last 24 hours</option>
+                      <option value="6h">Last 6 hours</option>
+                      <option value="60m">Last 60 minutes</option>
+                      <option value="30m">Last 30 minutes</option>
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Sort
+                    </span>
+                    <select
+                      value={sortOrder}
+                      onChange={(e) => {
+                        setSortOrder(e.target.value as SortOrder);
+                        setPage(1);
+                      }}
+                      className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    >
+                      <option value="freshest">Freshest first</option>
+                      <option value="date_asc">Date ascending</option>
+                      <option value="confidence_desc">Confidence (high to low)</option>
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Previous appointments
+                    </span>
+                    <select
+                      value={previousAppointmentsFilter}
+                      onChange={(e) => {
+                        setPreviousAppointmentsFilter(
+                          e.target.value as PreviousAppointmentsFilter
+                        );
+                        setPage(1);
+                      }}
+                      className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    >
+                      <option value="any">Any</option>
+                      <option value="yes">Yes</option>
+                      <option value="no">No</option>
+                    </select>
+                  </label>
+                </div>
+
+                <div className="flex items-end gap-2">
+                  <div className="inline-flex h-10 items-center rounded-md border border-slate-300 bg-white p-1">
                     <button
                       type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        exportRowsToXml(visibleRows);
-                        setIsExportMenuOpen(false);
-                      }}
-                      className="block w-full rounded px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100"
+                      onClick={() => setPage((prev) => Math.max(1, prev - 1))}
+                      disabled={(data.page ?? page) <= 1}
+                      className="h-8 rounded px-3 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      Export XML
+                      Previous
                     </button>
+                    <span className="px-2 text-xs font-medium text-slate-500">
+                      Page {data.page ?? page}/{data.totalPages ?? 1}
+                    </span>
                     <button
                       type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        exportRowsToCsv(visibleRows);
-                        setIsExportMenuOpen(false);
-                      }}
-                      className="block w-full rounded px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100"
+                      onClick={() =>
+                        setPage((prev) => Math.min(data.totalPages ?? 1, prev + 1))
+                      }
+                      disabled={(data.page ?? page) >= (data.totalPages ?? 1)}
+                      className="h-8 rounded px-3 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      Export CSV
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        exportRowsToJson(visibleRows);
-                        setIsExportMenuOpen(false);
-                      }}
-                      className="block w-full rounded px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100"
-                    >
-                      Export JSON
+                      Next
                     </button>
                   </div>
+                  <div className="relative" ref={exportMenuRef}>
+                    <button
+                      type="button"
+                      title="Download options"
+                      aria-label="Download options"
+                      aria-haspopup="menu"
+                      aria-expanded={isExportMenuOpen}
+                      onClick={() => setIsExportMenuOpen((open) => !open)}
+                      className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={visibleRows.length === 0}
+                    >
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        className="h-4 w-4"
+                        aria-hidden="true"
+                      >
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                        <polyline points="7 10 12 15 17 10" />
+                        <line x1="12" y1="15" x2="12" y2="3" />
+                      </svg>
+                    </button>
+                    {isExportMenuOpen && (
+                      <div
+                        role="menu"
+                        className="absolute right-0 z-20 mt-2 w-40 rounded-md border border-slate-200 bg-white p-1 shadow-lg"
+                      >
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            exportRowsToXml(visibleRows);
+                            setIsExportMenuOpen(false);
+                          }}
+                          className="block w-full rounded px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100"
+                        >
+                          Export XML
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            exportRowsToCsv(visibleRows);
+                            setIsExportMenuOpen(false);
+                          }}
+                          className="block w-full rounded px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100"
+                        >
+                          Export CSV
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            exportRowsToJson(visibleRows);
+                            setIsExportMenuOpen(false);
+                          }}
+                          className="block w-full rounded px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100"
+                        >
+                          Export JSON
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                <span className="rounded-full bg-slate-100 px-2.5 py-1">
+                  Rows on page: {visibleRows.length}
+                </span>
+                <span className="rounded-full bg-slate-100 px-2.5 py-1">
+                  Filtered total: {data.totalCount ?? visibleRows.length}
+                </span>
+                {typeof data.totalRows === "number" && (
+                  <span className="rounded-full bg-slate-100 px-2.5 py-1">
+                    Overall total: {data.totalRows}
+                  </span>
                 )}
               </div>
             </div>
