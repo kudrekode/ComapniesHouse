@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 import type { PipelineResult, PipelineRow, DirectorDetail } from "../lib/runPipeline";
 
 type OfficerAppointment = {
@@ -85,6 +85,57 @@ function exportRowsToCsv(rows: PipelineRow[]): void {
   const a = document.createElement("a");
   a.href = url;
   a.download = `companies-view-${timestamp}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function exportRowsToJson(rows: PipelineRow[]): void {
+  const json = `${JSON.stringify(rows, null, 2)}\n`;
+  const blob = new Blob([json], { type: "application/json;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `companies-view-${timestamp}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function xmlEscape(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function exportRowsToXml(rows: PipelineRow[]): void {
+  const xmlRows = rows
+    .map((row) => {
+      const fields = Object.entries(row).map(([key, rawValue]) => {
+        const value =
+          rawValue == null
+            ? ""
+            : typeof rawValue === "string"
+              ? rawValue
+              : JSON.stringify(rawValue);
+        return `    <${key}>${xmlEscape(value)}</${key}>`;
+      });
+      return `  <company>\n${fields.join("\n")}\n  </company>`;
+    })
+    .join("\n");
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<companies>\n${xmlRows}\n</companies>\n`;
+  const blob = new Blob([xml], { type: "application/xml;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `companies-view-${timestamp}.xml`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -293,7 +344,21 @@ export default function DashboardPage() {
     appointments: OfficerAppointment[] | null;
     loading: boolean;
   } | null>(null);
+  const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
+  const exportMenuRef = useRef<HTMLDivElement | null>(null);
   const renderNowMs = Date.now();
+
+  const todayStats = useMemo(() => {
+    const rows = data?.rows ?? [];
+    const nowMs = Date.now();
+    const enrichedToday = rows.filter((row) => rowIsWithinTimeWindow(row, "today", nowMs)).length;
+    const linkedInMatches = rows.filter((row) => {
+      if (!rowIsWithinTimeWindow(row, "today", nowMs)) return false;
+      return row.has_linkedin === true || Boolean((row.linkedin_url || "").trim());
+    }).length;
+    const matchRate = enrichedToday > 0 ? (linkedInMatches / enrichedToday) * 100 : 0;
+    return { enrichedToday, linkedInMatches, matchRate };
+  }, [data?.rows]);
 
   const filteredRows = useMemo(() => {
     if (!data?.rows) return [];
@@ -381,6 +446,28 @@ export default function DashboardPage() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [appointmentsFor]);
 
+  useEffect(() => {
+    if (!isExportMenuOpen) return;
+    const onClickOutside = (event: MouseEvent) => {
+      if (
+        exportMenuRef.current &&
+        event.target instanceof Node &&
+        !exportMenuRef.current.contains(event.target)
+      ) {
+        setIsExportMenuOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setIsExportMenuOpen(false);
+    };
+    window.addEventListener("mousedown", onClickOutside);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("mousedown", onClickOutside);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [isExportMenuOpen]);
+
   async function loadAppointments(
     officerId: string,
     name: string,
@@ -429,7 +516,7 @@ export default function DashboardPage() {
 
   return (
     <main className="min-h-screen bg-slate-50 text-slate-900">
-      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+      <div className="mx-auto w-full max-w-[96rem] px-2 py-8 sm:px-3 lg:px-4">
         <h1 className="text-2xl font-semibold tracking-tight">Company Dashboard</h1>
 
         {loading && (
@@ -451,6 +538,33 @@ export default function DashboardPage() {
               Last updated: {new Date(data.updatedAt).toLocaleString()} | Data refreshes every 5
               min | Data retention: 24h | Hot lead = high-confidence LinkedIn match
             </p>
+
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div className="rounded-md border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Enriched today
+                </p>
+                <p className="mt-1 text-2xl font-semibold text-slate-900">
+                  {todayStats.enrichedToday}
+                </p>
+              </div>
+              <div className="rounded-md border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                  LinkedIn matches
+                </p>
+                <p className="mt-1 text-2xl font-semibold text-slate-900">
+                  {todayStats.linkedInMatches}
+                </p>
+              </div>
+              <div className="rounded-md border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Match rate
+                </p>
+                <p className="mt-1 text-2xl font-semibold text-slate-900">
+                  {todayStats.matchRate.toFixed(1)}%
+                </p>
+              </div>
+            </div>
 
             <div className="mt-4 flex flex-wrap items-center gap-3">
               <label className="text-sm font-medium text-slate-700">Filter by SIC code(s):</label>
@@ -502,45 +616,89 @@ export default function DashboardPage() {
               <span className="text-sm text-slate-500">
                 Showing {filteredRows.length} of {data.rows.length} companies
               </span>
-              <button
-                type="button"
-                title="Export current view to CSV"
-                aria-label="Export current view to CSV"
-                onClick={() => exportRowsToCsv(filteredRows)}
-                className="inline-flex h-8 w-8 items-center justify-center rounded border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={filteredRows.length === 0}
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="h-4 w-4"
-                  aria-hidden="true"
+              <div className="relative" ref={exportMenuRef}>
+                <button
+                  type="button"
+                  title="Download options"
+                  aria-label="Download options"
+                  aria-haspopup="menu"
+                  aria-expanded={isExportMenuOpen}
+                  onClick={() => setIsExportMenuOpen((open) => !open)}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={filteredRows.length === 0}
                 >
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                  <polyline points="7 10 12 15 17 10" />
-                  <line x1="12" y1="15" x2="12" y2="3" />
-                </svg>
-              </button>
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="h-4 w-4"
+                    aria-hidden="true"
+                  >
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <polyline points="7 10 12 15 17 10" />
+                    <line x1="12" y1="15" x2="12" y2="3" />
+                  </svg>
+                </button>
+                {isExportMenuOpen && (
+                  <div
+                    role="menu"
+                    className="absolute right-0 z-20 mt-2 w-36 rounded-md border border-slate-200 bg-white p-1 shadow-lg"
+                  >
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        exportRowsToXml(filteredRows);
+                        setIsExportMenuOpen(false);
+                      }}
+                      className="block w-full rounded px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100"
+                    >
+                      Export XML
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        exportRowsToCsv(filteredRows);
+                        setIsExportMenuOpen(false);
+                      }}
+                      className="block w-full rounded px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100"
+                    >
+                      Export CSV
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        exportRowsToJson(filteredRows);
+                        setIsExportMenuOpen(false);
+                      }}
+                      className="block w-full rounded px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100"
+                    >
+                      Export JSON
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="mt-6 overflow-x-auto rounded-lg border border-slate-200 bg-white shadow-sm">
-              <table className="min-w-full table-fixed text-sm">
+              <table className="w-full min-w-[1200px] table-fixed text-sm">
                 <thead className="bg-slate-100 text-left text-slate-700">
                   <tr>
-                    <th className="w-[14%] px-4 py-3 font-medium">Company</th>
-                    <th className="w-[10%] px-4 py-3 font-medium">Number</th>
-                    <th className="w-[10%] px-4 py-3 font-medium">Incorporated</th>
-                    <th className="w-[8%] px-4 py-3 font-medium">SIC Codes</th>
-                    <th className="w-[8%] px-4 py-3 font-medium">Type</th>
-                    <th className="w-[18%] px-4 py-3 font-medium">Registered Office</th>
-                    <th className="w-[20%] px-4 py-3 font-medium">Directors</th>
-                    <th className="w-[7%] px-4 py-3 font-medium">Confidence</th>
-                    <th className="w-[7%] px-4 py-3 font-medium">Open</th>
+                    <th className="w-[18%] px-3 py-3 font-medium">Company</th>
+                    <th className="w-[10%] px-3 py-3 font-medium">Number</th>
+                    <th className="w-[11%] px-3 py-3 font-medium">Incorporated</th>
+                    <th className="w-[7%] px-3 py-3 font-medium">SIC Codes</th>
+                    <th className="w-[9%] px-3 py-3 font-medium">Type</th>
+                    <th className="w-[17%] px-3 py-3 font-medium">Registered Office</th>
+                    <th className="w-[18%] px-3 py-3 font-medium">Directors</th>
+                    <th className="w-[5%] px-3 py-3 font-medium">Confidence</th>
+                    <th className="w-[5%] px-3 py-3 font-medium">Open</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -553,7 +711,7 @@ export default function DashboardPage() {
                         key={`${row.company_number}-${idx}`}
                         className={idx % 2 === 0 ? "bg-white" : "bg-slate-50"}
                       >
-                        <td className="px-4 py-3 align-top whitespace-normal break-words text-slate-800">
+                        <td className="px-3 py-3 align-top whitespace-normal break-words text-slate-800">
                           <div className="flex flex-wrap items-center gap-2">
                             <span>{row.company_name}</span>
                             {isVeryFresh(row, renderNowMs) && (
@@ -579,10 +737,10 @@ export default function DashboardPage() {
                             )}
                           </div>
                         </td>
-                        <td className="px-4 py-3 align-top whitespace-normal break-words text-slate-700">
+                        <td className="px-3 py-3 align-top whitespace-normal break-words text-slate-700">
                           {row.company_number}
                         </td>
-                        <td className="px-4 py-3 align-top whitespace-normal break-words text-slate-700">
+                        <td className="px-3 py-3 align-top whitespace-normal break-words text-slate-700">
                           <div className="flex flex-col gap-1">
                             <span>{row.incorporation_date}</span>
                             {(() => {
@@ -592,16 +750,16 @@ export default function DashboardPage() {
                             })()}
                           </div>
                         </td>
-                        <td className="px-4 py-3 align-top whitespace-normal break-words text-slate-700">
+                        <td className="px-3 py-3 align-top whitespace-normal break-all text-slate-700">
                           {row.sic_codes || "—"}
                         </td>
-                        <td className="px-4 py-3 align-top whitespace-normal break-words text-slate-700">
+                        <td className="px-3 py-3 align-top whitespace-normal break-words text-slate-700">
                           {row.company_type}
                         </td>
-                        <td className="px-4 py-3 align-top whitespace-normal break-words text-slate-700">
+                        <td className="px-3 py-3 align-top whitespace-normal break-words text-slate-700">
                           {row.registered_office_address || "—"}
                         </td>
-                        <td className="px-4 py-3 align-top whitespace-normal break-words text-slate-700">
+                        <td className="px-3 py-3 align-top whitespace-normal break-words text-slate-700">
                           <div className="flex flex-col gap-2">
                             {directorsDetail.length > 0
                               ? directorsDetail.map((d) => (
@@ -622,14 +780,14 @@ export default function DashboardPage() {
                               : row.directors}
                           </div>
                         </td>
-                        <td className="px-4 py-3 align-top whitespace-normal break-words text-slate-700">
+                        <td className="px-3 py-3 align-top whitespace-normal break-words text-slate-700">
                           {(() => {
                             const confidence = rowConfidencePercent(row);
                             if (confidence === null) return "—";
                             return `${confidence}%`;
                           })()}
                         </td>
-                        <td className="px-4 py-3 align-top text-slate-700">
+                        <td className="px-3 py-3 align-top text-slate-700">
                           <button
                             type="button"
                             aria-label={`Open link for ${row.company_name}`}

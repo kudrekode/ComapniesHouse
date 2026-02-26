@@ -1,4 +1,5 @@
 import nextEnv from "@next/env";
+import { randomUUID } from "node:crypto";
 import { runPipeline } from "../lib/runPipeline.js";
 import { getSupabaseAdminClient } from "../lib/supabaseAdmin.js";
 import { CompaniesHouseClient } from "../companiesHouseClient.js";
@@ -11,8 +12,17 @@ loadEnvConfig(process.cwd());
 const INGEST_OVERLAP_MS = 2 * 60 * 1000;
 const RETENTION_MS = 24 * 60 * 60 * 1000;
 const STATE_KEY = "last_processed_at";
+const LOCK_KEY = "ingest_lock";
 const BOOTSTRAP_MINUTES = Number.parseInt(
   process.env.INGEST_BOOTSTRAP_MINUTES || "5",
+  10
+);
+const INGEST_LOCK_TTL_MINUTES = Number.parseInt(
+  process.env.INGEST_LOCK_TTL_MINUTES || "15",
+  10
+);
+const INGEST_LOCK_HEARTBEAT_SECONDS = Number.parseInt(
+  process.env.INGEST_LOCK_HEARTBEAT_SECONDS || "60",
   10
 );
 const INITIAL_BACKFILL_HOURS = Number.parseInt(
@@ -84,6 +94,16 @@ type DirectorBackfillUpdate = {
   directors_detail: string;
 };
 
+function dedupeByKey<T>(items: T[], keyOf: (item: T) => string): T[] {
+  const byKey = new Map<string, T>();
+  for (const item of items) {
+    const key = keyOf(item).trim();
+    if (!key) continue;
+    byKey.set(key, item);
+  }
+  return Array.from(byKey.values());
+}
+
 function createConcurrencyLimiter(limit: number) {
   let active = 0;
   const queue: (() => void)[] = [];
@@ -151,6 +171,58 @@ function parseIsoMs(value: string | null | undefined): number | null {
   if (!value) return null;
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? null : parsed;
+}
+
+async function acquireIngestLock(runId: string, nowMs: number): Promise<boolean> {
+  const supabase = getSupabaseAdminClient();
+  const ttlMs =
+    (Number.isFinite(INGEST_LOCK_TTL_MINUTES) && INGEST_LOCK_TTL_MINUTES > 0
+      ? INGEST_LOCK_TTL_MINUTES
+      : 15) *
+    60 *
+    1000;
+  const nowIso = new Date(nowMs).toISOString();
+  const staleCutoffIso = new Date(nowMs - ttlMs).toISOString();
+
+  const { error: cleanupError } = await supabase
+    .from("ingest_state")
+    .delete()
+    .eq("key", LOCK_KEY)
+    .lt("updated_at", staleCutoffIso);
+  if (cleanupError) throw cleanupError;
+
+  const { error: insertError } = await supabase
+    .from("ingest_state")
+    .insert({ key: LOCK_KEY, value: runId, updated_at: nowIso });
+  if (!insertError) return true;
+
+  if (insertError.code === "23505") return false;
+  throw insertError;
+}
+
+async function refreshIngestLock(runId: string): Promise<void> {
+  const supabase = getSupabaseAdminClient();
+  const nowIso = new Date().toISOString();
+  const { error } = await supabase
+    .from("ingest_state")
+    .update({ updated_at: nowIso, value: runId })
+    .eq("key", LOCK_KEY)
+    .eq("value", runId);
+  if (error) {
+    console.error("[Ingest] Lock heartbeat failed:", error);
+  }
+}
+
+async function releaseIngestLock(runId: string): Promise<void> {
+  const supabase = getSupabaseAdminClient();
+  const { error } = await supabase
+    .from("ingest_state")
+    .delete()
+    .eq("key", LOCK_KEY)
+    .eq("value", runId);
+  if (error) {
+    console.error("[Ingest] Failed to release lock:", error);
+  }
 }
 
 async function readLastProcessedAtMs(): Promise<number> {
@@ -344,18 +416,20 @@ async function refreshOfficerSummaries(
   );
 
   if (fetched.length > 0) {
+    const dedupedFetched = dedupeByKey(fetched, (row) => row.officer_id);
+    const dedupedCacheRows = dedupeByKey(appointmentCacheRows, (row) => row.key);
     const supabase = getSupabaseAdminClient();
     const { error: summaryError } = await supabase
       .from("officer_appointment_summary")
-      .upsert(fetched, { onConflict: "officer_id" });
+      .upsert(dedupedFetched, { onConflict: "officer_id" });
     if (summaryError) throw summaryError;
-    if (appointmentCacheRows.length > 0) {
+    if (dedupedCacheRows.length > 0) {
       const { error: cacheError } = await supabase
         .from("ingest_state")
-        .upsert(appointmentCacheRows, { onConflict: "key" });
+        .upsert(dedupedCacheRows, { onConflict: "key" });
       if (cacheError) throw cacheError;
     }
-    for (const row of fetched) existing.set(row.officer_id, row);
+    for (const row of dedupedFetched) existing.set(row.officer_id, row);
   }
 
   return existing;
@@ -469,7 +543,8 @@ async function updateExistingCompanySummaries(
 async function upsertCompanies(nowIso: string, rows: Awaited<ReturnType<typeof runPipeline>>["rows"]) {
   if (rows.length === 0) return;
   const supabase = getSupabaseAdminClient();
-  const payload = rows.map((row) => ({
+  const payload = dedupeByKey(
+    rows.map((row) => ({
     company_number: row.company_number,
     company_name: row.company_name,
     incorporation_date: row.incorporation_date || null,
@@ -489,7 +564,9 @@ async function upsertCompanies(nowIso: string, rows: Awaited<ReturnType<typeof r
         : null,
     has_linkedin: row.has_linkedin,
     linkedin_url: row.linkedin_url,
-  }));
+    })),
+    (row) => row.company_number
+  );
 
   const { error } = await supabase
     .from("companies")
@@ -668,8 +745,25 @@ async function pruneExpiredRows(nowMs: number): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  const runId = randomUUID();
   const nowMs = Date.now();
   const nowIso = new Date(nowMs).toISOString();
+  const lockAcquired = await acquireIngestLock(runId, nowMs);
+  if (!lockAcquired) {
+    console.log("[Ingest] Active run lock exists; skipping this cron tick");
+    return;
+  }
+  console.log(`[Ingest] Lock acquired (run_id=${runId})`);
+  const heartbeatMs =
+    (Number.isFinite(INGEST_LOCK_HEARTBEAT_SECONDS) && INGEST_LOCK_HEARTBEAT_SECONDS > 0
+      ? INGEST_LOCK_HEARTBEAT_SECONDS
+      : 60) *
+    1000;
+  const heartbeat = setInterval(() => {
+    void refreshIngestLock(runId);
+  }, heartbeatMs);
+  heartbeat.unref?.();
+  try {
   const lastProcessedAtMs = await readLastProcessedAtMs();
   const knownCompanyNumbers = await readKnownCompanyNumbers();
   const initialBackfillMs =
@@ -734,6 +828,11 @@ async function main(): Promise<void> {
   await writeLastProcessedAt(nowIso);
 
   console.log("[Ingest] Completed successfully");
+  } finally {
+    clearInterval(heartbeat);
+    await releaseIngestLock(runId);
+    console.log(`[Ingest] Lock released (run_id=${runId})`);
+  }
 }
 
 main().catch((error) => {

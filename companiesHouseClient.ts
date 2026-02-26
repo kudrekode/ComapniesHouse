@@ -222,6 +222,8 @@ export class CompaniesHouseClient {
     config: AxiosRequestConfig
   ): Promise<AxiosResponse<T>> {
     let attempt = 0;
+    const method = String(config.method || "GET").toUpperCase();
+    const url = String(config.url || "");
     while (true) {
       try {
         return await this.http.request<T>(config);
@@ -246,6 +248,17 @@ export class CompaniesHouseClient {
           attempt,
           retryAfterSeconds,
           rateLimitResetEpochSeconds
+        );
+        console.warn(
+          `[CH] Retry ${attempt}/${this.maxRetries} ${method} ${url} status=${status ?? "unknown"} wait_ms=${backoffMs} retry_after=${Number.isNaN(
+            retryAfterSeconds
+          )
+            ? "n/a"
+            : retryAfterSeconds} rate_limit_reset=${Number.isNaN(
+            rateLimitResetEpochSeconds
+          )
+            ? "n/a"
+            : rateLimitResetEpochSeconds}`
         );
         await this.sleep(backoffMs);
       }
