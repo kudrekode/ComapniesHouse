@@ -356,6 +356,8 @@ export default function DashboardPage() {
   const [previousAppointmentsByOfficer, setPreviousAppointmentsByOfficer] = useState<
     Record<string, number>
   >({});
+  const [page, setPage] = useState(1);
+  const [pageSize] = useState(200);
   const [appointmentsFor, setAppointmentsFor] = useState<{
     officerId: string;
     name: string;
@@ -422,60 +424,7 @@ export default function DashboardPage() {
     setHelpStepIndex(0);
   }
 
-  const todayStats = useMemo(() => {
-    const rows = data?.rows ?? [];
-    const nowMs = Date.now();
-    const enrichedToday = rows.filter((row) => rowIsWithinTimeWindow(row, "today", nowMs)).length;
-    const linkedInMatches = rows.filter((row) => {
-      if (!rowIsWithinTimeWindow(row, "today", nowMs)) return false;
-      return row.has_linkedin === true || Boolean((row.linkedin_url || "").trim());
-    }).length;
-    const matchRate = enrichedToday > 0 ? (linkedInMatches / enrichedToday) * 100 : 0;
-    return { enrichedToday, linkedInMatches, matchRate };
-  }, [data?.rows]);
-
-  const filteredRows = useMemo(() => {
-    if (!data?.rows) return [];
-    const nowMs = Date.now();
-    return data.rows
-      .filter((row) => rowMatchesSicFilter(row, sicFilter))
-      .filter((row) => rowIsWithinTimeWindow(row, timeWindow, nowMs))
-      .filter((row) =>
-        rowMatchesPreviousAppointmentsFilter(
-          row,
-          previousAppointmentsFilter,
-          previousAppointmentsByOfficer
-        )
-      )
-      .sort((a, b) => {
-        if (sortOrder === "confidence_desc") {
-          const aConf = rowConfidencePercent(a) ?? -1;
-          const bConf = rowConfidencePercent(b) ?? -1;
-          if (aConf !== bConf) return bConf - aConf;
-          const aTs = rowReferenceMs(a) ?? 0;
-          const bTs = rowReferenceMs(b) ?? 0;
-          return bTs - aTs;
-        }
-        if (sortOrder === "date_asc") {
-          const aDate = parseIncorporationDateOnly(a.incorporation_date) || "";
-          const bDate = parseIncorporationDateOnly(b.incorporation_date) || "";
-          if (aDate !== bDate) return aDate.localeCompare(bDate);
-          const aTs = rowReferenceMs(a) ?? 0;
-          const bTs = rowReferenceMs(b) ?? 0;
-          return aTs - bTs;
-        }
-        const aTs = rowReferenceMs(a) ?? 0;
-        const bTs = rowReferenceMs(b) ?? 0;
-        return bTs - aTs;
-      });
-  }, [
-    data?.rows,
-    sicFilter,
-    timeWindow,
-    sortOrder,
-    previousAppointmentsFilter,
-    previousAppointmentsByOfficer,
-  ]);
+  const visibleRows = useMemo(() => data?.rows ?? [], [data?.rows]);
 
   useEffect(() => {
     let cancelled = false;
@@ -483,14 +432,28 @@ export default function DashboardPage() {
     const load = async (initialLoad: boolean) => {
       try {
         if (initialLoad) setLoading(true);
-        const res = await fetch("/api/run");
+        const params = new URLSearchParams({
+          page: String(page),
+          pageSize: String(pageSize),
+          sicFilter,
+          timeWindow,
+          sortOrder,
+          previousAppointmentsFilter,
+        });
+        const res = await fetch(`/api/run?${params.toString()}`);
         const json = await res.json();
         if (!res.ok) {
           const msg = json?.error ?? `Request failed (${res.status})`;
           throw new Error(msg);
         }
         if (cancelled) return;
-        setData(json as PipelineResult);
+        const next = json as PipelineResult;
+        setData(next);
+        const totalPages = Math.max(1, next.totalPages || 1);
+        if (page > totalPages) {
+          setPage(totalPages);
+          return;
+        }
         setError(null);
       } catch (err) {
         if (cancelled) return;
@@ -509,7 +472,7 @@ export default function DashboardPage() {
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, []);
+  }, [page, pageSize, sicFilter, timeWindow, sortOrder, previousAppointmentsFilter]);
 
   useEffect(() => {
     if (!appointmentsFor) return;
@@ -641,40 +604,46 @@ export default function DashboardPage() {
                   Enriched today
                 </p>
                 <p className="mt-1 text-2xl font-semibold text-slate-900">
-                  {todayStats.enrichedToday}
+                  {data.summary?.enrichedToday ?? 0}
                 </p>
               </div>
               <div className="rounded-md border border-slate-200 bg-white px-4 py-3 shadow-sm">
                 <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                  LinkedIn matches
+                  Today&apos;s LinkedIn matches
                 </p>
                 <p className="mt-1 text-2xl font-semibold text-slate-900">
-                  {todayStats.linkedInMatches}
+                  {data.summary?.linkedInMatches ?? 0}
                 </p>
               </div>
               <div className="rounded-md border border-slate-200 bg-white px-4 py-3 shadow-sm">
                 <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                  Match rate
+                  Today&apos;s match rate
                 </p>
                 <p className="mt-1 text-2xl font-semibold text-slate-900">
-                  {todayStats.matchRate.toFixed(1)}%
+                  {((data.summary?.matchRate ?? 0) as number).toFixed(1)}%
                 </p>
               </div>
             </div>
 
             <div className="mt-4 flex flex-wrap items-center gap-3">
               <label className="text-sm font-medium text-slate-700">Filter by SIC code(s):</label>
-              <input
-                type="text"
-                placeholder="e.g. 62020, 70229 or 62010"
-                value={sicFilter}
-                onChange={(e) => setSicFilter(e.target.value)}
-                className="rounded border border-slate-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              />
+                <input
+                  type="text"
+                  placeholder="e.g. 62020, 70229 or 62010"
+                  value={sicFilter}
+                  onChange={(e) => {
+                    setSicFilter(e.target.value);
+                    setPage(1);
+                  }}
+                  className="rounded border border-slate-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
               <label className="text-sm font-medium text-slate-700">Window:</label>
               <select
                 value={timeWindow}
-                onChange={(e) => setTimeWindow(e.target.value as TimeWindow)}
+                onChange={(e) => {
+                  setTimeWindow(e.target.value as TimeWindow);
+                  setPage(1);
+                }}
                 className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
               >
                 <option value="today">Today (default)</option>
@@ -686,7 +655,10 @@ export default function DashboardPage() {
               <label className="text-sm font-medium text-slate-700">Sort:</label>
               <select
                 value={sortOrder}
-                onChange={(e) => setSortOrder(e.target.value as SortOrder)}
+                onChange={(e) => {
+                  setSortOrder(e.target.value as SortOrder);
+                  setPage(1);
+                }}
                 className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
               >
                 <option value="freshest">Freshest first</option>
@@ -699,9 +671,12 @@ export default function DashboardPage() {
               <select
                 value={previousAppointmentsFilter}
                 onChange={(e) =>
-                  setPreviousAppointmentsFilter(
-                    e.target.value as PreviousAppointmentsFilter
-                  )
+                  {
+                    setPreviousAppointmentsFilter(
+                      e.target.value as PreviousAppointmentsFilter
+                    );
+                    setPage(1);
+                  }
                 }
                 className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
               >
@@ -710,8 +685,28 @@ export default function DashboardPage() {
                 <option value="no">No</option>
               </select>
               <span className="text-sm text-slate-500">
-                Showing {filteredRows.length} of {data.rows.length} companies
+                Showing page {data.page ?? page} of {data.totalPages ?? 1} | Rows on page{" "}
+                {visibleRows.length} | Filtered total {data.totalCount ?? visibleRows.length}
+                {typeof data.totalRows === "number" ? ` | Overall total ${data.totalRows}` : ""}
               </span>
+              <button
+                type="button"
+                onClick={() => setPage((prev) => Math.max(1, prev - 1))}
+                disabled={(data.page ?? page) <= 1}
+                className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Prev page
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setPage((prev) => Math.min(data.totalPages ?? 1, prev + 1))
+                }
+                disabled={(data.page ?? page) >= (data.totalPages ?? 1)}
+                className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Next page
+              </button>
               <div className="relative" ref={exportMenuRef}>
                 <button
                   type="button"
@@ -721,7 +716,7 @@ export default function DashboardPage() {
                   aria-expanded={isExportMenuOpen}
                   onClick={() => setIsExportMenuOpen((open) => !open)}
                   className="inline-flex h-8 w-8 items-center justify-center rounded border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={filteredRows.length === 0}
+                  disabled={visibleRows.length === 0}
                 >
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
@@ -748,7 +743,7 @@ export default function DashboardPage() {
                       type="button"
                       role="menuitem"
                       onClick={() => {
-                        exportRowsToXml(filteredRows);
+                        exportRowsToXml(visibleRows);
                         setIsExportMenuOpen(false);
                       }}
                       className="block w-full rounded px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100"
@@ -759,7 +754,7 @@ export default function DashboardPage() {
                       type="button"
                       role="menuitem"
                       onClick={() => {
-                        exportRowsToCsv(filteredRows);
+                        exportRowsToCsv(visibleRows);
                         setIsExportMenuOpen(false);
                       }}
                       className="block w-full rounded px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100"
@@ -770,7 +765,7 @@ export default function DashboardPage() {
                       type="button"
                       role="menuitem"
                       onClick={() => {
-                        exportRowsToJson(filteredRows);
+                        exportRowsToJson(visibleRows);
                         setIsExportMenuOpen(false);
                       }}
                       className="block w-full rounded px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100"
@@ -798,7 +793,7 @@ export default function DashboardPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredRows.map((row, idx) => {
+                  {visibleRows.map((row, idx) => {
                     const directorsDetail = parseDirectorsDetail(
                       "directors_detail" in row ? row.directors_detail : undefined
                     );

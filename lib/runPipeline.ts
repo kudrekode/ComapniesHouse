@@ -30,6 +30,16 @@ export type PipelineRow = {
 export type PipelineResult = {
   updatedAt: string;
   rows: PipelineRow[];
+  totalCount?: number;
+  totalRows?: number;
+  page?: number;
+  pageSize?: number;
+  totalPages?: number;
+  summary?: {
+    enrichedToday: number;
+    linkedInMatches: number;
+    matchRate: number;
+  };
 };
 
 export type RunPipelineOptions = {
