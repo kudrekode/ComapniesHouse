@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useState, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { PipelineResult, PipelineRow, DirectorDetail } from "../lib/runPipeline";
+import { getSupabaseBrowserClient } from "../lib/supabaseBrowser";
 
 type OfficerAppointment = {
   company_name?: string;
@@ -345,7 +347,13 @@ function isVeryFresh(row: PipelineRow, nowMs: number): boolean {
 }
 
 export default function DashboardPage() {
+  const router = useRouter();
+  const supabase = useMemo(() => getSupabaseBrowserClient(), []);
   const [data, setData] = useState<PipelineResult | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [hasBootstrappedTutorialFlag, setHasBootstrappedTutorialFlag] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sicFilter, setSicFilter] = useState("");
@@ -370,6 +378,10 @@ export default function DashboardPage() {
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [helpStepIndex, setHelpStepIndex] = useState(0);
   const [helpStepDirection, setHelpStepDirection] = useState<HelpStepDirection>("forward");
+  const eventQueueRef = useRef<
+    Array<{ user_id: string; event_name: string; event_props: Record<string, unknown> }>
+  >([]);
+  const flushTimerRef = useRef<number | null>(null);
   const renderNowMs = Date.now();
   const tutorialSteps: TutorialStep[] = [
     {
@@ -416,6 +428,7 @@ export default function DashboardPage() {
   function openHelpTutorial() {
     setHelpStepIndex(0);
     setIsHelpOpen(true);
+    trackEvent("tutorial_opened", { source: "manual" });
   }
 
   function closeHelpTutorial() {
@@ -424,10 +437,154 @@ export default function DashboardPage() {
     setHelpStepIndex(0);
   }
 
+  const flushEvents = useCallback(async () => {
+    if (!userId) return;
+    const queue = eventQueueRef.current;
+    if (queue.length === 0) return;
+    const batch = queue.splice(0, queue.length);
+    if (flushTimerRef.current !== null) {
+      window.clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
+    const { error: insertError } = await supabase.from("user_events").insert(batch);
+    if (insertError) {
+      console.error("Event tracking insert failed:", insertError);
+    }
+  }, [supabase, userId]);
+
+  const trackEvent = useCallback(
+    (
+      eventName: string,
+      eventProps: Record<string, unknown> = {},
+      options: { immediate?: boolean } = {}
+    ) => {
+      if (!userId) return;
+      eventQueueRef.current.push({
+        user_id: userId,
+        event_name: eventName,
+        event_props: eventProps,
+      });
+      if (options.immediate || eventQueueRef.current.length >= 10) {
+        void flushEvents();
+        return;
+      }
+      if (flushTimerRef.current !== null) return;
+      flushTimerRef.current = window.setTimeout(() => {
+        void flushEvents();
+      }, 2500);
+    },
+    [flushEvents, userId]
+  );
+
   const visibleRows = useMemo(() => data?.rows ?? [], [data?.rows]);
 
   useEffect(() => {
     let cancelled = false;
+    const applySession = (nextUserId: string | null) => {
+      if (cancelled) return;
+      setUserId(nextUserId);
+      setAuthReady(true);
+      if (!nextUserId) {
+        router.replace("/login");
+      }
+    };
+
+    (async () => {
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError) {
+        if (!cancelled) {
+          setAuthError(sessionError.message);
+          setAuthReady(true);
+          router.replace("/login");
+        }
+        return;
+      }
+      applySession(sessionData.session?.user?.id ?? null);
+    })();
+
+    const { data: authSub } = supabase.auth.onAuthStateChange((_event, session) => {
+      applySession(session?.user?.id ?? null);
+    });
+
+    return () => {
+      cancelled = true;
+      authSub.subscription.unsubscribe();
+    };
+  }, [router, supabase]);
+
+  useEffect(() => {
+    if (!userId || hasBootstrappedTutorialFlag) return;
+    let cancelled = false;
+
+    (async () => {
+      const { data: profile, error: profileError } = await supabase
+        .from("profiles")
+        .select("has_seen_tutorial")
+        .eq("id", userId)
+        .maybeSingle<{ has_seen_tutorial: boolean }>();
+      if (cancelled) return;
+      if (profileError) {
+        console.error("Profile read failed:", profileError);
+        setHasBootstrappedTutorialFlag(true);
+        return;
+      }
+      const hasSeen = Boolean(profile?.has_seen_tutorial);
+      if (!hasSeen) {
+        setHelpStepIndex(0);
+        setIsHelpOpen(true);
+        trackEvent("tutorial_opened", { source: "first_login" });
+        const { error: updateError } = await supabase
+          .from("profiles")
+          .update({ has_seen_tutorial: true, updated_at: new Date().toISOString() })
+          .eq("id", userId);
+        if (updateError) {
+          console.error("Failed to update tutorial flag:", updateError);
+        }
+      }
+      setHasBootstrappedTutorialFlag(true);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [hasBootstrappedTutorialFlag, supabase, trackEvent, userId]);
+
+  useEffect(() => {
+    return () => {
+      if (flushTimerRef.current !== null) {
+        window.clearTimeout(flushTimerRef.current);
+        flushTimerRef.current = null;
+      }
+      void flushEvents();
+    };
+  }, [flushEvents]);
+
+  useEffect(() => {
+    if (!userId) return;
+    const timeoutId = window.setTimeout(() => {
+      trackEvent("filter_applied", {
+        sicFilter,
+        timeWindow,
+        sortOrder,
+        previousAppointmentsFilter,
+      });
+    }, 500);
+    return () => window.clearTimeout(timeoutId);
+  }, [previousAppointmentsFilter, sicFilter, sortOrder, timeWindow, trackEvent, userId]);
+
+  useEffect(() => {
+    if (!userId) return;
+    trackEvent("page_changed", { page, pageSize });
+  }, [page, pageSize, trackEvent, userId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!authReady || !userId) {
+      if (authReady) setLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
 
     const load = async (initialLoad: boolean) => {
       try {
@@ -472,7 +629,16 @@ export default function DashboardPage() {
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [page, pageSize, sicFilter, timeWindow, sortOrder, previousAppointmentsFilter]);
+  }, [
+    authReady,
+    userId,
+    page,
+    pageSize,
+    sicFilter,
+    timeWindow,
+    sortOrder,
+    previousAppointmentsFilter,
+  ]);
 
   useEffect(() => {
     if (!appointmentsFor) return;
@@ -562,23 +728,55 @@ export default function DashboardPage() {
     }
   }
 
+  async function handleSignOut() {
+    await flushEvents();
+    const { error: signOutError } = await supabase.auth.signOut();
+    if (signOutError) {
+      setAuthError(signOutError.message);
+      return;
+    }
+    router.replace("/login");
+  }
+
   return (
     <main className="min-h-screen bg-slate-50 text-slate-900">
       <div className="mx-auto w-full max-w-[96rem] px-2 py-8 sm:px-3 lg:px-4">
         <div className="flex items-center justify-between gap-4">
           <h1 className="text-2xl font-semibold tracking-tight">Company Dashboard</h1>
-          <button
-            type="button"
-            aria-label="Open help tutorial"
-            title="Help tutorial"
-            onClick={openHelpTutorial}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-300 bg-white text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
-          >
-            ?
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              aria-label="Open help tutorial"
+              title="Help tutorial"
+              onClick={openHelpTutorial}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-300 bg-white text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+            >
+              ?
+            </button>
+            <button
+              type="button"
+              onClick={handleSignOut}
+              className="inline-flex h-9 items-center justify-center rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
+            >
+              Sign out
+            </button>
+          </div>
         </div>
 
-        {loading && (
+        {authError && (
+          <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {authError}
+          </div>
+        )}
+
+        {!authReady && (
+          <div className="mt-8 flex items-center gap-3 text-slate-600">
+            <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700" />
+            <span>Checking session...</span>
+          </div>
+        )}
+
+        {authReady && loading && (
           <div className="mt-8 flex items-center gap-3 text-slate-600">
             <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700" />
             <span>Running pipeline...</span>
@@ -760,6 +958,7 @@ export default function DashboardPage() {
                           type="button"
                           role="menuitem"
                           onClick={() => {
+                            trackEvent("export_clicked", { format: "xml", page }, { immediate: true });
                             exportRowsToXml(visibleRows);
                             setIsExportMenuOpen(false);
                           }}
@@ -771,6 +970,7 @@ export default function DashboardPage() {
                           type="button"
                           role="menuitem"
                           onClick={() => {
+                            trackEvent("export_clicked", { format: "csv", page }, { immediate: true });
                             exportRowsToCsv(visibleRows);
                             setIsExportMenuOpen(false);
                           }}
@@ -782,6 +982,7 @@ export default function DashboardPage() {
                           type="button"
                           role="menuitem"
                           onClick={() => {
+                            trackEvent("export_clicked", { format: "json", page }, { immediate: true });
                             exportRowsToJson(visibleRows);
                             setIsExportMenuOpen(false);
                           }}
@@ -916,6 +1117,15 @@ export default function DashboardPage() {
                             aria-label={`Open link for ${row.company_name}`}
                             title={row.linkedin_url ? "Open LinkedIn profile" : "Search company on Google"}
                             onClick={() => {
+                              trackEvent(
+                                "open_clicked",
+                                {
+                                  company_number: row.company_number,
+                                  source: row.linkedin_url ? "linkedin" : "google",
+                                  page,
+                                },
+                                { immediate: true }
+                              );
                               const targetUrl = row.linkedin_url || buildGoogleCompanySearchUrl(row);
                               window.open(targetUrl, "_blank", "noopener,noreferrer");
                             }}
@@ -1240,6 +1450,11 @@ export default function DashboardPage() {
                           <button
                             type="button"
                             onClick={() => {
+                              trackEvent(
+                                "tutorial_completed",
+                                { final_step: helpStepIndex + 1 },
+                                { immediate: true }
+                              );
                               closeHelpTutorial();
                             }}
                             className="rounded border border-blue-600 bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700"
