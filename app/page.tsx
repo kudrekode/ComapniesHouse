@@ -20,6 +20,25 @@ type OfficerAppointment = {
 type TimeWindow = "today" | "24h" | "6h" | "60m" | "30m";
 type SortOrder = "freshest" | "date_asc" | "confidence_desc";
 type PreviousAppointmentsFilter = "any" | "yes" | "no";
+type TutorialGraphic =
+  | "overview"
+  | "filters"
+  | "table"
+  | "exports"
+  | "actions";
+
+type TutorialStep = {
+  title: string;
+  description: string;
+  graphic: TutorialGraphic;
+};
+type HelpStepDirection = "forward" | "backward";
+
+const DEFAULT_TUTORIAL_STEP: TutorialStep = {
+  title: "Help",
+  description: "Use this guide to understand the dashboard controls and workflows.",
+  graphic: "overview",
+};
 
 function toCsvCell(value: string | number | boolean | null | undefined): string {
   const raw = value == null ? "" : String(value);
@@ -346,7 +365,51 @@ export default function DashboardPage() {
   } | null>(null);
   const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   const exportMenuRef = useRef<HTMLDivElement | null>(null);
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
+  const [helpStepIndex, setHelpStepIndex] = useState(0);
+  const [helpStepDirection, setHelpStepDirection] = useState<HelpStepDirection>("forward");
   const renderNowMs = Date.now();
+  const tutorialSteps: TutorialStep[] = [
+    {
+      title: "What this dashboard shows",
+      description:
+        "This page shows newly processed companies from your pipeline. Summary cards at the top give today's enrichment totals and LinkedIn match rate.",
+      graphic: "overview",
+    },
+    {
+      title: "Filter your view quickly",
+      description:
+        "Use SIC, time window, sort order, and previous appointments filters to narrow results. The count tells you how many companies remain in the current view.",
+      graphic: "filters",
+    },
+    {
+      title: "Read the table signals",
+      description:
+        "Fresh badges and hot-lead tags help prioritize. Confidence shows match quality. Open launches either LinkedIn or a Google fallback search.",
+      graphic: "table",
+    },
+    {
+      title: "Download in the format you need",
+      description:
+        "Click the download icon, then choose XML, CSV, or JSON. Export always uses your current filtered view so you only download relevant rows.",
+      graphic: "exports",
+    },
+    {
+      title: "Investigate directors faster",
+      description:
+        "Use Previous appointments on a director to open history in a focused modal. This helps you qualify risk and experience before outreach.",
+      graphic: "actions",
+    },
+  ];
+  const activeHelpStep =
+    tutorialSteps[Math.min(helpStepIndex, tutorialSteps.length - 1)] || DEFAULT_TUTORIAL_STEP;
+
+  function goToHelpStep(nextIndex: number) {
+    const bounded = Math.max(0, Math.min(tutorialSteps.length - 1, nextIndex));
+    if (bounded === helpStepIndex) return;
+    setHelpStepDirection(bounded > helpStepIndex ? "forward" : "backward");
+    setHelpStepIndex(bounded);
+  }
 
   const todayStats = useMemo(() => {
     const rows = data?.rows ?? [];
@@ -468,6 +531,18 @@ export default function DashboardPage() {
     };
   }, [isExportMenuOpen]);
 
+  useEffect(() => {
+    if (!isHelpOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsHelpOpen(false);
+        setHelpStepIndex(0);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isHelpOpen]);
+
   async function loadAppointments(
     officerId: string,
     name: string,
@@ -517,7 +592,21 @@ export default function DashboardPage() {
   return (
     <main className="min-h-screen bg-slate-50 text-slate-900">
       <div className="mx-auto w-full max-w-[96rem] px-2 py-8 sm:px-3 lg:px-4">
-        <h1 className="text-2xl font-semibold tracking-tight">Company Dashboard</h1>
+        <div className="flex items-center justify-between gap-4">
+          <h1 className="text-2xl font-semibold tracking-tight">Company Dashboard</h1>
+          <button
+            type="button"
+            aria-label="Open help tutorial"
+            title="Help tutorial"
+            onClick={() => {
+              setHelpStepIndex(0);
+              setIsHelpOpen(true);
+            }}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-300 bg-white text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+          >
+            ?
+          </button>
+        </div>
 
         {loading && (
           <div className="mt-8 flex items-center gap-3 text-slate-600">
@@ -881,6 +970,234 @@ export default function DashboardPage() {
                         No previous appointments found for this director.
                       </p>
                     )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {isHelpOpen && (
+              <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+                <button
+                  type="button"
+                  aria-label="Close help modal"
+                  className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+                  onClick={() => {
+                    setIsHelpOpen(false);
+                    setHelpStepIndex(0);
+                  }}
+                />
+                <div
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="help-modal-title"
+                  className="relative z-10 w-full max-w-2xl rounded-xl border border-slate-200 bg-white shadow-2xl"
+                >
+                  <div className="border-b border-slate-200 px-5 py-4">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-widest text-blue-600">
+                          Tutorial
+                        </p>
+                        <h2 id="help-modal-title" className="mt-1 text-xl font-semibold text-slate-900">
+                          {activeHelpStep.title}
+                        </h2>
+                        <p className="mt-2 text-sm text-slate-600">{activeHelpStep.description}</p>
+                      </div>
+                      <button
+                        type="button"
+                        className="text-sm text-slate-500 hover:text-slate-700"
+                        onClick={() => {
+                          setIsHelpOpen(false);
+                          setHelpStepIndex(0);
+                        }}
+                      >
+                        Close
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="px-5 py-5">
+                    <div
+                      key={helpStepIndex}
+                      className="will-change-transform"
+                      style={{
+                        animation:
+                          helpStepDirection === "forward"
+                            ? "tutorial-slide-right 220ms ease-out"
+                            : "tutorial-slide-left 220ms ease-out",
+                      }}
+                    >
+                      {activeHelpStep.graphic === "overview" && (
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                          <div className="grid grid-cols-3 gap-3">
+                            <div className="rounded border border-slate-200 bg-white p-3">
+                              <p className="text-[11px] text-slate-500">Enriched today</p>
+                              <p className="mt-1 text-lg font-semibold text-slate-900">17</p>
+                            </div>
+                            <div className="rounded border border-slate-200 bg-white p-3">
+                              <p className="text-[11px] text-slate-500">LinkedIn matches</p>
+                              <p className="mt-1 text-lg font-semibold text-slate-900">2</p>
+                            </div>
+                            <div className="rounded border border-slate-200 bg-white p-3">
+                              <p className="text-[11px] text-slate-500">Match rate</p>
+                              <p className="mt-1 text-lg font-semibold text-slate-900">11.7%</p>
+                            </div>
+                          </div>
+                          <div className="mt-4 rounded border border-slate-200 bg-white p-3 text-xs text-slate-700">
+                            <p className="font-medium">Example row snapshot</p>
+                            <p className="mt-1">Riverstone Labs Ltd | 16123456 | 62020 | 82%</p>
+                          </div>
+                        </div>
+                      )}
+
+                      {activeHelpStep.graphic === "filters" && (
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                          <div className="grid grid-cols-2 gap-3">
+                            <div className="rounded border border-slate-200 bg-white p-3 text-xs">
+                              <p className="text-slate-500">SIC filter</p>
+                              <p className="mt-2 rounded border border-slate-200 bg-slate-50 px-2 py-1.5 text-slate-700">
+                                62020, 70229
+                              </p>
+                            </div>
+                            <div className="rounded border border-slate-200 bg-white p-3 text-xs">
+                              <p className="text-slate-500">Window</p>
+                              <p className="mt-2 rounded border border-slate-200 bg-slate-50 px-2 py-1.5 text-slate-700">
+                                Today
+                              </p>
+                            </div>
+                            <div className="rounded border border-slate-200 bg-white p-3 text-xs">
+                              <p className="text-slate-500">Sort</p>
+                              <p className="mt-2 rounded border border-slate-200 bg-slate-50 px-2 py-1.5 text-slate-700">
+                                Confidence (high to low)
+                              </p>
+                            </div>
+                            <div className="rounded border border-slate-200 bg-white p-3 text-xs">
+                              <p className="text-slate-500">Previous appointments</p>
+                              <p className="mt-2 rounded border border-slate-200 bg-slate-50 px-2 py-1.5 text-slate-700">
+                                Yes
+                              </p>
+                            </div>
+                          </div>
+                          <div className="mt-4 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                            Showing 5 of 17 companies
+                          </div>
+                        </div>
+                      )}
+
+                      {activeHelpStep.graphic === "table" && (
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                          <div className="rounded border border-slate-200 bg-white p-3 text-xs">
+                            <div className="grid grid-cols-5 gap-2 font-medium text-slate-500">
+                              <div>Company</div>
+                              <div>Number</div>
+                              <div>SIC</div>
+                              <div>Confidence</div>
+                              <div>Open</div>
+                            </div>
+                            <div className="mt-3 rounded border border-slate-200 bg-slate-50 p-2">
+                              <div className="flex items-center gap-2">
+                                <span className="font-medium text-slate-800">Northgate Data Ltd</span>
+                                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+                                  NEW 30m
+                                </span>
+                                <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold text-rose-700">
+                                  HOT LEAD
+                                </span>
+                              </div>
+                              <p className="mt-1 text-slate-600">16200931 | 62012 | 91%</p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {activeHelpStep.graphic === "exports" && (
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                          <div className="mx-auto w-56 rounded border border-slate-200 bg-white p-3">
+                            <p className="text-xs text-slate-500">Download options</p>
+                            <div className="mt-3 space-y-2 text-xs">
+                              <div className="rounded border border-slate-200 bg-slate-50 px-2 py-1.5 text-slate-700">
+                                Export XML (for integrations)
+                              </div>
+                              <div className="rounded border border-slate-200 bg-slate-50 px-2 py-1.5 text-slate-700">
+                                Export CSV (for spreadsheets)
+                              </div>
+                              <div className="rounded border border-slate-200 bg-slate-50 px-2 py-1.5 text-slate-700">
+                                Export JSON (for APIs/scripts)
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {activeHelpStep.graphic === "actions" && (
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                          <div className="rounded border border-slate-200 bg-white p-3 text-xs">
+                            <p className="font-medium text-slate-700">Directors</p>
+                            <div className="mt-3 space-y-2">
+                              <div className="flex items-start justify-between rounded border border-slate-200 bg-slate-50 p-2">
+                                <span className="text-slate-700">Amelia Hart</span>
+                                <span className="text-blue-700">Previous appointments</span>
+                              </div>
+                              <div className="flex items-start justify-between rounded border border-slate-200 bg-slate-50 p-2">
+                                <span className="text-slate-700">Noah Bennett</span>
+                                <span className="text-blue-700">Previous appointments</span>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="mt-4 rounded border border-slate-200 bg-white p-3 text-xs text-slate-600">
+                            Modal opens with prior companies, role, and dates for quick qualification.
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="border-t border-slate-200 px-5 py-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2">
+                        {tutorialSteps.map((_, idx) => (
+                          <span
+                            key={idx}
+                            className={`h-2 w-2 rounded-full ${
+                              idx === helpStepIndex ? "bg-blue-600" : "bg-slate-300"
+                            }`}
+                          />
+                        ))}
+                        <span className="ml-2 text-xs text-slate-500">
+                          Step {helpStepIndex + 1} of {tutorialSteps.length}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => goToHelpStep(helpStepIndex - 1)}
+                          disabled={helpStepIndex === 0}
+                          className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          Previous
+                        </button>
+                        {helpStepIndex < tutorialSteps.length - 1 ? (
+                          <button
+                            type="button"
+                            onClick={() => goToHelpStep(helpStepIndex + 1)}
+                            className="rounded border border-blue-600 bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700"
+                          >
+                            Next
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsHelpOpen(false);
+                              setHelpStepIndex(0);
+                            }}
+                            className="rounded border border-blue-600 bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700"
+                          >
+                            Finish
+                          </button>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
