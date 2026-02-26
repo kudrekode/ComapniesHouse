@@ -1,15 +1,12 @@
 import { NextResponse } from "next/server";
+import { unstable_cache } from "next/cache";
 import { getSupabaseAdminClient } from "../../../lib/supabaseAdmin";
 import type { PipelineResult, PipelineRow } from "../../../lib/runPipeline";
 
-export const dynamic = "force-dynamic";
-export const revalidate = 0;
-export const fetchCache = "force-no-store";
+const DASHBOARD_CACHE_SECONDS = 5 * 60;
 
-const NO_STORE_HEADERS = {
-  "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0, s-maxage=0",
-  Pragma: "no-cache",
-  Expires: "0",
+const CACHE_HEADERS = {
+  "Cache-Control": `public, max-age=0, s-maxage=${DASHBOARD_CACHE_SECONDS}, stale-while-revalidate=60`,
 };
 
 type CompanyDbRow = {
@@ -60,10 +57,9 @@ function toPipelineRow(row: CompanyDbRow): PipelineRow {
   };
 }
 
-export async function GET() {
-  try {
+const loadDashboardData = unstable_cache(
+  async (): Promise<PipelineResult> => {
     const supabase = getSupabaseAdminClient();
-
     const [rowsResult, stateResult] = await Promise.all([
       supabase
         .from("companies")
@@ -83,14 +79,21 @@ export async function GET() {
 
     const rows = (rowsResult.data || []).map(toPipelineRow);
     const updatedAt = stateResult.data?.value || new Date().toISOString();
-    const result: PipelineResult = { updatedAt, rows };
+    return { updatedAt, rows };
+  },
+  ["dashboard-run-v1"],
+  { revalidate: DASHBOARD_CACHE_SECONDS }
+);
 
-    return NextResponse.json(result, { status: 200, headers: NO_STORE_HEADERS });
+export async function GET() {
+  try {
+    const result = await loadDashboardData();
+    return NextResponse.json(result, { status: 200, headers: CACHE_HEADERS });
   } catch (error) {
     console.error("DB read failed:", error);
     return NextResponse.json(
       { error: "Failed to load dashboard data" },
-      { status: 500, headers: NO_STORE_HEADERS }
+      { status: 500 }
     );
   }
 }

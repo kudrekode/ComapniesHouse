@@ -409,7 +409,7 @@ export default function DashboardPage() {
     const load = async (initialLoad: boolean) => {
       try {
         if (initialLoad) setLoading(true);
-        const res = await fetch("/api/run", { cache: "no-store" });
+        const res = await fetch("/api/run");
         const json = await res.json();
         if (!res.ok) {
           const msg = json?.error ?? `Request failed (${res.status})`;
