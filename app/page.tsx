@@ -411,6 +411,17 @@ export default function DashboardPage() {
     setHelpStepIndex(bounded);
   }
 
+  function openHelpTutorial() {
+    setHelpStepIndex(0);
+    setIsHelpOpen(true);
+  }
+
+  function closeHelpTutorial() {
+    if (!isHelpOpen) return;
+    setIsHelpOpen(false);
+    setHelpStepIndex(0);
+  }
+
   const todayStats = useMemo(() => {
     const rows = data?.rows ?? [];
     const nowMs = Date.now();
@@ -535,8 +546,7 @@ export default function DashboardPage() {
     if (!isHelpOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setIsHelpOpen(false);
-        setHelpStepIndex(0);
+        closeHelpTutorial();
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -598,10 +608,7 @@ export default function DashboardPage() {
             type="button"
             aria-label="Open help tutorial"
             title="Help tutorial"
-            onClick={() => {
-              setHelpStepIndex(0);
-              setIsHelpOpen(true);
-            }}
+            onClick={openHelpTutorial}
             className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-300 bg-white text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
           >
             ?
@@ -981,10 +988,7 @@ export default function DashboardPage() {
                   type="button"
                   aria-label="Close help modal"
                   className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
-                  onClick={() => {
-                    setIsHelpOpen(false);
-                    setHelpStepIndex(0);
-                  }}
+                  onClick={closeHelpTutorial}
                 />
                 <div
                   role="dialog"
@@ -1006,10 +1010,7 @@ export default function DashboardPage() {
                       <button
                         type="button"
                         className="text-sm text-slate-500 hover:text-slate-700"
-                        onClick={() => {
-                          setIsHelpOpen(false);
-                          setHelpStepIndex(0);
-                        }}
+                        onClick={closeHelpTutorial}
                       >
                         Close
                       </button>
@@ -1087,7 +1088,7 @@ export default function DashboardPage() {
                       {activeHelpStep.graphic === "table" && (
                         <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
                           <div className="rounded border border-slate-200 bg-white p-3 text-xs">
-                            <div className="grid grid-cols-5 gap-2 font-medium text-slate-500">
+                            <div className="grid grid-cols-[2.2fr_1fr_1fr_1.2fr_0.8fr] gap-2 font-medium text-slate-500">
                               <div>Company</div>
                               <div>Number</div>
                               <div>SIC</div>
@@ -1095,16 +1096,40 @@ export default function DashboardPage() {
                               <div>Open</div>
                             </div>
                             <div className="mt-3 rounded border border-slate-200 bg-slate-50 p-2">
-                              <div className="flex items-center gap-2">
-                                <span className="font-medium text-slate-800">Northgate Data Ltd</span>
-                                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
-                                  NEW 30m
-                                </span>
-                                <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold text-rose-700">
-                                  HOT LEAD
-                                </span>
+                              <div className="grid grid-cols-[2.2fr_1fr_1fr_1.2fr_0.8fr] items-start gap-2 text-slate-700">
+                                <div className="min-w-0">
+                                  <p className="font-medium text-slate-800">Northgate Data Ltd</p>
+                                  <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                                    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+                                      NEW 30m
+                                    </span>
+                                    <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold text-rose-700">
+                                      HOT LEAD
+                                    </span>
+                                  </div>
+                                </div>
+                                <div>16200931</div>
+                                <div>62012</div>
+                                <div className="font-semibold text-slate-800">91%</div>
+                                <div>
+                                  <span className="inline-flex h-6 w-6 items-center justify-center rounded border border-slate-300 bg-white text-slate-700">
+                                    <svg
+                                      xmlns="http://www.w3.org/2000/svg"
+                                      viewBox="0 0 24 24"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      strokeWidth="2"
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      className="h-3.5 w-3.5"
+                                      aria-hidden="true"
+                                    >
+                                      <circle cx="11" cy="11" r="7" />
+                                      <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                                    </svg>
+                                  </span>
+                                </div>
                               </div>
-                              <p className="mt-1 text-slate-600">16200931 | 62012 | 91%</p>
                             </div>
                           </div>
                         </div>
@@ -1188,8 +1213,7 @@ export default function DashboardPage() {
                           <button
                             type="button"
                             onClick={() => {
-                              setIsHelpOpen(false);
-                              setHelpStepIndex(0);
+                              closeHelpTutorial();
                             }}
                             className="rounded border border-blue-600 bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700"
                           >
