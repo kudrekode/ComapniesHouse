@@ -691,14 +691,14 @@ export default function DashboardPage() {
                 <thead className="bg-slate-100 text-left text-slate-700">
                   <tr>
                     <th className="w-[18%] px-3 py-3 font-medium">Company</th>
-                    <th className="w-[10%] px-3 py-3 font-medium">Number</th>
+                    <th className="w-[8%] px-3 py-3 font-medium">Number</th>
                     <th className="w-[11%] px-3 py-3 font-medium">Incorporated</th>
                     <th className="w-[7%] px-3 py-3 font-medium">SIC Codes</th>
-                    <th className="w-[9%] px-3 py-3 font-medium">Type</th>
-                    <th className="w-[17%] px-3 py-3 font-medium">Registered Office</th>
-                    <th className="w-[18%] px-3 py-3 font-medium">Directors</th>
-                    <th className="w-[5%] px-3 py-3 font-medium">Confidence</th>
-                    <th className="w-[5%] px-3 py-3 font-medium">Open</th>
+                    <th className="w-[7%] px-3 py-3 font-medium">Type</th>
+                    <th className="w-[18%] px-3 py-3 font-medium">Registered Office</th>
+                    <th className="w-[17%] px-3 py-3 font-medium">Directors</th>
+                    <th className="w-[7%] px-3 py-3 font-medium">Confidence</th>
+                    <th className="w-[7%] px-3 py-3 font-medium">Open</th>
                   </tr>
                 </thead>
                 <tbody>
