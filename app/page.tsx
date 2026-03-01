@@ -356,6 +356,7 @@ export default function DashboardPage() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [hasBootstrappedTutorialFlag, setHasBootstrappedTutorialFlag] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [isTableLoading, setIsTableLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sicFilter, setSicFilter] = useState("");
   const [sectorFilter, setSectorFilter] = useState<string[]>([]);
@@ -386,6 +387,7 @@ export default function DashboardPage() {
     Array<{ user_id: string; event_name: string; event_props: Record<string, unknown> }>
   >([]);
   const flushTimerRef = useRef<number | null>(null);
+  const hasLoadedOnceRef = useRef(false);
   const renderNowMs = Date.now();
   const tutorialSteps: TutorialStep[] = [
     {
@@ -597,7 +599,11 @@ export default function DashboardPage() {
 
     const load = async (initialLoad: boolean) => {
       try {
-        if (initialLoad) setLoading(true);
+        if (initialLoad) {
+          setLoading(true);
+        } else {
+          setIsTableLoading(true);
+        }
         const params = new URLSearchParams({
           page: String(page),
           pageSize: String(pageSize),
@@ -616,6 +622,7 @@ export default function DashboardPage() {
         if (cancelled) return;
         const next = json as PipelineResult;
         setData(next);
+        hasLoadedOnceRef.current = true;
         const totalPages = Math.max(1, next.totalPages || 1);
         if (page > totalPages) {
           setPage(totalPages);
@@ -626,11 +633,14 @@ export default function DashboardPage() {
         if (cancelled) return;
         setError(err instanceof Error ? err.message : "Unknown error");
       } finally {
-        if (!cancelled && initialLoad) setLoading(false);
+        if (!cancelled) {
+          if (initialLoad) setLoading(false);
+          setIsTableLoading(false);
+        }
       }
     };
 
-    void load(true);
+    void load(!hasLoadedOnceRef.current);
     const intervalId = window.setInterval(() => {
       void load(false);
     }, 5 * 60 * 1000);
@@ -1147,7 +1157,13 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            <div className="mt-6 overflow-x-auto rounded-lg border border-slate-200 bg-white shadow-sm">
+            <div className="mt-6 rounded-lg border border-slate-200 bg-white shadow-sm">
+              {isTableLoading && (
+                <div className="border-b border-slate-200 bg-slate-50 px-4 py-2 text-xs text-slate-600">
+                  Updating results...
+                </div>
+              )}
+              <div className="overflow-x-auto">
               <table className="w-full min-w-[1200px] table-fixed text-sm">
                 <thead className="bg-slate-100 text-left text-slate-700">
                   <tr>
@@ -1289,6 +1305,7 @@ export default function DashboardPage() {
                   })}
                 </tbody>
               </table>
+              </div>
             </div>
 
             {appointmentsFor && (
