@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { unstable_cache } from "next/cache";
 import { getSupabaseAdminClient } from "../../../lib/supabaseAdmin";
 import type { PipelineResult, PipelineRow } from "../../../lib/runPipeline";
+import { normalizeSectorFilter, rowMatchesSectorFilter } from "../../../lib/sicSector";
 
 const DASHBOARD_CACHE_SECONDS = 5 * 60;
 const DEFAULT_PAGE_SIZE = 200;
@@ -42,6 +43,7 @@ type QueryParams = {
   page: number;
   pageSize: number;
   sicFilter: string;
+  sectorFilter: string[];
   timeWindow: TimeWindow;
   sortOrder: SortOrder;
   previousAppointmentsFilter: PreviousAppointmentsFilter;
@@ -101,6 +103,7 @@ function parseQueryParams(request: NextRequest): QueryParams {
     page,
     pageSize,
     sicFilter: String(search.get("sicFilter") || "").trim(),
+    sectorFilter: normalizeSectorFilter(String(search.get("sectorFilter") || "")),
     timeWindow: normalizeTimeWindow(search.get("timeWindow")),
     sortOrder: normalizeSortOrder(search.get("sortOrder")),
     previousAppointmentsFilter: normalizePreviousAppointmentsFilter(
@@ -173,7 +176,8 @@ function applySort(query: any, sortOrder: SortOrder): any {
 }
 
 function cacheKeyFor(params: QueryParams): string {
-  return `dashboard-run-v2:p${params.page}:s${params.pageSize}:tw${params.timeWindow}:sort${params.sortOrder}:prev${params.previousAppointmentsFilter}:sic${params.sicFilter || "-"}`;
+  const sectorKey = params.sectorFilter.length > 0 ? params.sectorFilter.join(".") : "-";
+  return `dashboard-run-v3:p${params.page}:s${params.pageSize}:tw${params.timeWindow}:sort${params.sortOrder}:prev${params.previousAppointmentsFilter}:sic${params.sicFilter || "-"}:sector${sectorKey}`;
 }
 
 async function loadDashboardData(params: QueryParams): Promise<PipelineResult> {
@@ -184,16 +188,18 @@ async function loadDashboardData(params: QueryParams): Promise<PipelineResult> {
     "company_name, company_number, incorporation_date, first_seen_at, has_previous_appointments, previous_appointments_count, sic_codes, company_type, registered_office_address, directors, directors_detail, has_linkedin, linkedin_url, website_url, contact_confidence, contact_source, search_confidence_score, search_confidence_reasons, search_disqualified, search_disqualify_reason";
 
   const rowsQueryBase = supabase.from("companies").select(columns, { count: "exact" });
-  const rowsQueryFiltered = applySort(
-    applyDashboardFilters(rowsQueryBase, params),
-    params.sortOrder
-  ).range(from, to);
+  const rowsQueryFiltered = applySort(applyDashboardFilters(rowsQueryBase, params), params.sortOrder).range(
+    from,
+    to
+  );
+  const rowsQueryForSector = applySort(applyDashboardFilters(rowsQueryBase, params), params.sortOrder);
 
   const todayRange = windowRange("today");
 
-  const [rowsResult, stateResult, totalRowsResult, enrichedTodayResult, linkedinMatchesResult] =
+  const [rowsResult, rowsForSectorResult, stateResult, totalRowsResult, enrichedTodayResult, linkedinMatchesResult] =
     await Promise.all([
       rowsQueryFiltered,
+      params.sectorFilter.length > 0 ? rowsQueryForSector : Promise.resolve(null),
       supabase
         .from("ingest_state")
         .select("value")
@@ -214,13 +220,22 @@ async function loadDashboardData(params: QueryParams): Promise<PipelineResult> {
     ]);
 
   if (rowsResult.error) throw rowsResult.error;
+  if (rowsForSectorResult && rowsForSectorResult.error) throw rowsForSectorResult.error;
   if (stateResult.error) throw stateResult.error;
   if (totalRowsResult.error) throw totalRowsResult.error;
   if (enrichedTodayResult.error) throw enrichedTodayResult.error;
   if (linkedinMatchesResult.error) throw linkedinMatchesResult.error;
 
-  const rows = (rowsResult.data || []).map(toPipelineRow);
-  const totalCount = rowsResult.count || 0;
+  let rows = (rowsResult.data || []).map(toPipelineRow);
+  let totalCount = rowsResult.count || 0;
+  if (params.sectorFilter.length > 0) {
+    const sectorRows: PipelineRow[] = (rowsForSectorResult?.data || []).map(toPipelineRow);
+    const sectorFilteredRows = sectorRows.filter((row: PipelineRow) =>
+      rowMatchesSectorFilter(row.sic_codes, params.sectorFilter)
+    );
+    totalCount = sectorFilteredRows.length;
+    rows = sectorFilteredRows.slice(from, to + 1);
+  }
   const totalRows = totalRowsResult.count || 0;
   const totalPages = Math.max(1, Math.ceil(totalCount / params.pageSize));
   const enrichedToday = enrichedTodayResult.count || 0;

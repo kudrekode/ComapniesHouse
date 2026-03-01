@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { PipelineResult, PipelineRow, DirectorDetail } from "../lib/runPipeline";
 import { getSupabaseBrowserClient } from "../lib/supabaseBrowser";
+import { SECTOR_OPTIONS } from "../lib/sicSector";
 
 type OfficerAppointment = {
   company_name?: string;
@@ -357,6 +358,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sicFilter, setSicFilter] = useState("");
+  const [sectorFilter, setSectorFilter] = useState<string[]>([]);
   const [timeWindow, setTimeWindow] = useState<TimeWindow>("today");
   const [sortOrder, setSortOrder] = useState<SortOrder>("freshest");
   const [previousAppointmentsFilter, setPreviousAppointmentsFilter] =
@@ -375,6 +377,8 @@ export default function DashboardPage() {
   } | null>(null);
   const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   const exportMenuRef = useRef<HTMLDivElement | null>(null);
+  const [isSectorMenuOpen, setIsSectorMenuOpen] = useState(false);
+  const sectorMenuRef = useRef<HTMLDivElement | null>(null);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [helpStepIndex, setHelpStepIndex] = useState(0);
   const [helpStepDirection, setHelpStepDirection] = useState<HelpStepDirection>("forward");
@@ -477,6 +481,10 @@ export default function DashboardPage() {
   );
 
   const visibleRows = useMemo(() => data?.rows ?? [], [data?.rows]);
+  const selectedSectorOptions = useMemo(
+    () => SECTOR_OPTIONS.filter((option) => sectorFilter.includes(option.id)),
+    [sectorFilter]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -564,13 +572,14 @@ export default function DashboardPage() {
     const timeoutId = window.setTimeout(() => {
       trackEvent("filter_applied", {
         sicFilter,
+        sectorFilter,
         timeWindow,
         sortOrder,
         previousAppointmentsFilter,
       });
     }, 500);
     return () => window.clearTimeout(timeoutId);
-  }, [previousAppointmentsFilter, sicFilter, sortOrder, timeWindow, trackEvent, userId]);
+  }, [previousAppointmentsFilter, sectorFilter, sicFilter, sortOrder, timeWindow, trackEvent, userId]);
 
   useEffect(() => {
     if (!userId) return;
@@ -593,6 +602,7 @@ export default function DashboardPage() {
           page: String(page),
           pageSize: String(pageSize),
           sicFilter,
+          sectorFilter: sectorFilter.join(","),
           timeWindow,
           sortOrder,
           previousAppointmentsFilter,
@@ -635,6 +645,7 @@ export default function DashboardPage() {
     page,
     pageSize,
     sicFilter,
+    sectorFilter,
     timeWindow,
     sortOrder,
     previousAppointmentsFilter,
@@ -670,6 +681,28 @@ export default function DashboardPage() {
       window.removeEventListener("keydown", onKeyDown);
     };
   }, [isExportMenuOpen]);
+
+  useEffect(() => {
+    if (!isSectorMenuOpen) return;
+    const onClickOutside = (event: MouseEvent) => {
+      if (
+        sectorMenuRef.current &&
+        event.target instanceof Node &&
+        !sectorMenuRef.current.contains(event.target)
+      ) {
+        setIsSectorMenuOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setIsSectorMenuOpen(false);
+    };
+    window.addEventListener("mousedown", onClickOutside);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("mousedown", onClickOutside);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [isSectorMenuOpen]);
 
   useEffect(() => {
     if (!isHelpOpen) return;
@@ -825,7 +858,7 @@ export default function DashboardPage() {
 
             <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_auto]">
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
                   <label className="flex flex-col gap-1">
                     <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                       SIC code(s)
@@ -841,6 +874,77 @@ export default function DashboardPage() {
                       className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                     />
                   </label>
+                  <div className="flex flex-col gap-1">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Sector(s)
+                    </span>
+                    <div className="relative" ref={sectorMenuRef}>
+                      <button
+                        type="button"
+                        onClick={() => setIsSectorMenuOpen((open) => !open)}
+                        aria-haspopup="menu"
+                        aria-expanded={isSectorMenuOpen}
+                        className="flex h-10 w-full items-center justify-between rounded-md border border-slate-300 bg-white px-3 text-left text-sm text-slate-800 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      >
+                        <span className="truncate">
+                          {selectedSectorOptions.length > 0
+                            ? `${selectedSectorOptions.length} selected`
+                            : "All sectors"}
+                        </span>
+                        <span className="text-xs text-slate-500">v</span>
+                      </button>
+                      {isSectorMenuOpen && (
+                        <div
+                          role="menu"
+                          className="absolute left-0 z-20 mt-2 max-h-72 w-full overflow-y-auto rounded-md border border-slate-200 bg-white p-2 shadow-lg"
+                        >
+                          <div className="mb-2 flex items-center justify-between">
+                            <p className="text-xs font-medium text-slate-500">
+                              Select one or more sectors
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSectorFilter([]);
+                                setPage(1);
+                              }}
+                              disabled={sectorFilter.length === 0}
+                              className="rounded px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              Clear all
+                            </button>
+                          </div>
+                          <div className="space-y-1">
+                            {SECTOR_OPTIONS.map((option) => {
+                              const checked = sectorFilter.includes(option.id);
+                              return (
+                                <label
+                                  key={option.id}
+                                  className="flex cursor-pointer items-start gap-2 rounded px-2 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={() => {
+                                      setSectorFilter((prev) => {
+                                        if (prev.includes(option.id)) {
+                                          return prev.filter((id) => id !== option.id);
+                                        }
+                                        return [...prev, option.id];
+                                      });
+                                      setPage(1);
+                                    }}
+                                    className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                  />
+                                  <span>{option.label}</span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                   <label className="flex flex-col gap-1">
                     <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                       Window
@@ -995,6 +1099,39 @@ export default function DashboardPage() {
                   </div>
                 </div>
               </div>
+              {selectedSectorOptions.length > 0 && (
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {selectedSectorOptions.map((option) => (
+                    <span
+                      key={option.id}
+                      className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700"
+                    >
+                      {option.label}
+                      <button
+                        type="button"
+                        aria-label={`Remove ${option.label}`}
+                        onClick={() => {
+                          setSectorFilter((prev) => prev.filter((id) => id !== option.id));
+                          setPage(1);
+                        }}
+                        className="rounded-full px-1 text-blue-700 hover:bg-blue-100"
+                      >
+                        x
+                      </button>
+                    </span>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSectorFilter([]);
+                      setPage(1);
+                    }}
+                    className="rounded-full border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100"
+                  >
+                    Clear all
+                  </button>
+                </div>
+              )}
               <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-600">
                 <span className="rounded-full bg-slate-100 px-2.5 py-1">
                   Rows on page: {visibleRows.length}
