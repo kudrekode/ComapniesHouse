@@ -1,0 +1,34 @@
+%% Data lifecycle overview. The RPC implementation and database DDL are not present in this repo.
+flowchart LR
+  SCHEDULER["npm run ingest:loop<br/>5-minute shell loop"] --> INGEST["scripts/ingest.ts"]
+  INGEST -->|"lock, heartbeat, watermark"| STATE[("ingest_state")]
+  INGEST -->|"24h appointment response cache"| STATE
+
+  INGEST --> PIPELINE["lib/runPipeline.ts"]
+  PIPELINE --> CH_CLIENT["CompaniesHouseClient"]
+  CH_CLIENT -->|"search, profiles, officers"| CH_API["Companies House API"]
+  CH_API --> CH_CLIENT
+  CH_CLIENT --> PIPELINE
+  PIPELINE --> INGEST
+
+  INGEST -->|"dedupe + upsert on company_number"| COMPANIES[("companies")]
+  INGEST <-->|"read / refresh summary by officer_id"| OFFICERS[("officer_appointment_summary")]
+  INGEST -->|"call after company upserts; SQL not in repo"| RPC["refresh_enrichment_queue RPC"]
+  RPC --> QUEUE[("enrichment_queue")]
+
+  QUEUE -->|"top 10 pending, unexpired rows with fewer than 2 searches"| WORKER["scripts/enrichmentCron.ts<br/>npm run enrich:once<br/>no scheduler shown in repo"]
+  WORKER -->|"up to 2 query variants; 15s timeout, no HTTP retry loop"| SERPER["Serper search API"]
+  SERPER --> WORKER
+  WORKER -->|"match + confidence + diagnostics"| COMPANIES
+  WORKER -->|"enriched / failed status + attempt count"| QUEUE
+
+  BROWSER["Browser dashboard"] -->|"GET /api/run: filters + pagination"| RUN_API["Read API route"]
+  RUN_API -->|"service-role query; 5m response cache"| COMPANIES
+  COMPANIES --> RUN_API
+  RUN_API --> BROWSER
+  BROWSER -->|"GET officer appointments"| APPOINTMENTS_API["Appointments API route"]
+  APPOINTMENTS_API -->|"read cached JSON"| STATE
+
+  SECURITY["Auth caveat: the page checks the session in the browser; data API routes do not verify it server-side."]
+  SECURITY -.-> RUN_API
+  SECURITY -.-> APPOINTMENTS_API

@@ -39,6 +39,8 @@ export type PipelineResult = {
     enrichedToday: number;
     linkedInMatches: number;
     matchRate: number;
+    /** Present in the local demo summary to distinguish scored rows from the sample size. */
+    enrichmentAttempts?: number;
   };
 };
 

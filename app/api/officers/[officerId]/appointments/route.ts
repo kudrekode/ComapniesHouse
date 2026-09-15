@@ -13,9 +13,9 @@ const NO_STORE_HEADERS = {
 
 export async function GET(
   _request: NextRequest,
-  context: { params: { officerId: string } }
+  context: { params: Promise<{ officerId: string }> }
 ) {
-  const { officerId } = context.params;
+  const { officerId } = await context.params;
   if (!officerId) {
     return NextResponse.json(
       { error: "Missing officer ID" },

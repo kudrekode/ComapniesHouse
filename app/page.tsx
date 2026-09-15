@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { PipelineResult, PipelineRow, DirectorDetail } from "../lib/runPipeline";
+import { createDemoAppointments, createDemoResult, createDemoRows } from "../lib/demoData";
+import { DEMO_MODE } from "../lib/demoMode";
 import { getSupabaseBrowserClient } from "../lib/supabaseBrowser";
 import { SECTOR_OPTIONS } from "../lib/sicSector";
 
@@ -349,7 +351,11 @@ function isVeryFresh(row: PipelineRow, nowMs: number): boolean {
 
 export default function DashboardPage() {
   const router = useRouter();
-  const supabase = useMemo(() => getSupabaseBrowserClient(), []);
+  const supabase = useMemo(
+    () => (DEMO_MODE ? null : getSupabaseBrowserClient()),
+    []
+  );
+  const demoRows = useMemo(() => createDemoRows(Date.now()), []);
   const [data, setData] = useState<PipelineResult | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
@@ -360,7 +366,7 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [sicFilter, setSicFilter] = useState("");
   const [sectorFilter, setSectorFilter] = useState<string[]>([]);
-  const [timeWindow, setTimeWindow] = useState<TimeWindow>("today");
+  const [timeWindow, setTimeWindow] = useState<TimeWindow>(DEMO_MODE ? "24h" : "today");
   const [sortOrder, setSortOrder] = useState<SortOrder>("freshest");
   const [previousAppointmentsFilter, setPreviousAppointmentsFilter] =
     useState<PreviousAppointmentsFilter>("any");
@@ -368,7 +374,7 @@ export default function DashboardPage() {
     Record<string, number>
   >({});
   const [page, setPage] = useState(1);
-  const [pageSize] = useState(200);
+  const [pageSize] = useState(DEMO_MODE ? 25 : 200);
   const [appointmentsFor, setAppointmentsFor] = useState<{
     officerId: string;
     name: string;
@@ -404,8 +410,9 @@ export default function DashboardPage() {
     },
     {
       title: "Read the table signals",
-      description:
-        "Fresh badges and hot-lead tags help prioritize. Confidence shows match quality. Open launches either LinkedIn or a Google fallback search.",
+      description: DEMO_MODE
+        ? "Fresh badges and hot-lead tags help prioritize. Confidence shows match quality. External links are disabled for this local sample."
+        : "Fresh badges and hot-lead tags help prioritize. Confidence shows match quality. Open launches either LinkedIn or a Google fallback search.",
       graphic: "table",
     },
     {
@@ -444,7 +451,7 @@ export default function DashboardPage() {
   }
 
   const flushEvents = useCallback(async () => {
-    if (!userId) return;
+    if (DEMO_MODE || !supabase || !userId) return;
     const queue = eventQueueRef.current;
     if (queue.length === 0) return;
     const batch = queue.splice(0, queue.length);
@@ -465,6 +472,7 @@ export default function DashboardPage() {
       options: { immediate?: boolean } = {}
     ) => {
       if (!userId) return;
+      if (DEMO_MODE || !supabase) return;
       eventQueueRef.current.push({
         user_id: userId,
         event_name: eventName,
@@ -479,7 +487,7 @@ export default function DashboardPage() {
         void flushEvents();
       }, 2500);
     },
-    [flushEvents, userId]
+    [flushEvents, supabase, userId]
   );
 
   const visibleRows = useMemo(() => data?.rows ?? [], [data?.rows]);
@@ -489,6 +497,14 @@ export default function DashboardPage() {
   );
 
   useEffect(() => {
+    if (DEMO_MODE) {
+      setUserId("local-demo");
+      setAuthReady(true);
+      setHasBootstrappedTutorialFlag(true);
+      return;
+    }
+    if (!supabase) return;
+
     let cancelled = false;
     const applySession = (nextUserId: string | null) => {
       if (cancelled) return;
@@ -523,7 +539,7 @@ export default function DashboardPage() {
   }, [router, supabase]);
 
   useEffect(() => {
-    if (!userId || hasBootstrappedTutorialFlag) return;
+    if (DEMO_MODE || !supabase || !userId || hasBootstrappedTutorialFlag) return;
     let cancelled = false;
 
     (async () => {
@@ -604,6 +620,27 @@ export default function DashboardPage() {
         } else {
           setIsTableLoading(true);
         }
+        if (DEMO_MODE) {
+          const next = createDemoResult(
+            demoRows,
+            {
+              page,
+              pageSize,
+              sicFilter,
+              sectorFilter,
+              timeWindow,
+              sortOrder,
+              previousAppointmentsFilter,
+            },
+            Date.now()
+          );
+          if (cancelled) return;
+          setData(next);
+          setError(null);
+          hasLoadedOnceRef.current = true;
+          if (page > (next.totalPages || 1)) setPage(next.totalPages || 1);
+          return;
+        }
         const params = new URLSearchParams({
           page: String(page),
           pageSize: String(pageSize),
@@ -641,16 +678,19 @@ export default function DashboardPage() {
     };
 
     void load(!hasLoadedOnceRef.current);
-    const intervalId = window.setInterval(() => {
-      void load(false);
-    }, 5 * 60 * 1000);
+    const intervalId = DEMO_MODE
+      ? null
+      : window.setInterval(() => {
+          void load(false);
+        }, 5 * 60 * 1000);
 
     return () => {
       cancelled = true;
-      window.clearInterval(intervalId);
+      if (intervalId !== null) window.clearInterval(intervalId);
     };
   }, [
     authReady,
+    demoRows,
     userId,
     page,
     pageSize,
@@ -742,12 +782,17 @@ export default function DashboardPage() {
       loading: true,
     });
     try {
-      const res = await fetch(`/api/officers/${encodeURIComponent(officerId)}/appointments`, {
-        cache: "no-store",
-      });
-      if (!res.ok) throw new Error("Failed to load");
-      const json = (await res.json()) as { appointments: OfficerAppointment[] };
-      const allAppointments = json.appointments ?? [];
+      let allAppointments: OfficerAppointment[];
+      if (DEMO_MODE) {
+        allAppointments = createDemoAppointments(officerId);
+      } else {
+        const res = await fetch(`/api/officers/${encodeURIComponent(officerId)}/appointments`, {
+          cache: "no-store",
+        });
+        if (!res.ok) throw new Error("Failed to load");
+        const json = (await res.json()) as { appointments: OfficerAppointment[] };
+        allAppointments = json.appointments ?? [];
+      }
       const previousAppointments = allAppointments.filter(
         (a) =>
           (a.appointed_to?.company_number || a.company_number || "").trim() !==
@@ -772,6 +817,7 @@ export default function DashboardPage() {
   }
 
   async function handleSignOut() {
+    if (DEMO_MODE || !supabase) return;
     await flushEvents();
     const { error: signOutError } = await supabase.auth.signOut();
     if (signOutError) {
@@ -787,6 +833,11 @@ export default function DashboardPage() {
         <div className="flex items-center justify-between gap-4">
           <h1 className="text-2xl font-semibold tracking-tight">Company Dashboard</h1>
           <div className="flex items-center gap-2">
+            {DEMO_MODE && (
+              <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800">
+                Local demo · no login
+              </span>
+            )}
             <button
               type="button"
               aria-label="Open help tutorial"
@@ -796,13 +847,15 @@ export default function DashboardPage() {
             >
               ?
             </button>
-            <button
-              type="button"
-              onClick={handleSignOut}
-              className="inline-flex h-9 items-center justify-center rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
-            >
-              Sign out
-            </button>
+            {!DEMO_MODE && (
+              <button
+                type="button"
+                onClick={handleSignOut}
+                className="inline-flex h-9 items-center justify-center rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
+              >
+                Sign out
+              </button>
+            )}
           </div>
         </div>
 
@@ -815,14 +868,14 @@ export default function DashboardPage() {
         {!authReady && (
           <div className="mt-8 flex items-center gap-3 text-slate-600">
             <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700" />
-            <span>Checking session...</span>
+            <span>{DEMO_MODE ? "Opening local demo..." : "Checking session..."}</span>
           </div>
         )}
 
         {authReady && loading && (
           <div className="mt-8 flex items-center gap-3 text-slate-600">
             <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700" />
-            <span>Running pipeline...</span>
+            <span>{DEMO_MODE ? "Loading sample companies..." : "Running pipeline..."}</span>
           </div>
         )}
 
@@ -835,34 +888,50 @@ export default function DashboardPage() {
         {!loading && !error && data && (
           <>
             <p className="mt-4 text-sm text-slate-600">
-              Last updated: {new Date(data.updatedAt).toLocaleString()} | Data refreshes every 5
-              min | Data retention: 24h | Hot lead = high-confidence LinkedIn match
+              {DEMO_MODE
+                ? "Synthetic local data · 75 companies from the last 24 hours · no external requests"
+                : `Last updated: ${new Date(data.updatedAt).toLocaleString()} | Data refreshes every 5 min | Data retention: 24h | Hot lead = high-confidence LinkedIn match`}
             </p>
 
             <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
               <div className="rounded-md border border-slate-200 bg-white px-4 py-3 shadow-sm">
                 <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                  Enriched today
+                  {DEMO_MODE ? "Companies in sample" : "Enriched today"}
                 </p>
                 <p className="mt-1 text-2xl font-semibold text-slate-900">
-                  {data.summary?.enrichedToday ?? 0}
+                  {DEMO_MODE ? data.totalRows ?? 0 : data.summary?.enrichedToday ?? 0}
                 </p>
               </div>
               <div className="rounded-md border border-slate-200 bg-white px-4 py-3 shadow-sm">
                 <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                  Today&apos;s LinkedIn matches
+                  {DEMO_MODE ? "Enrichment attempted" : "Today’s LinkedIn matches"}
                 </p>
                 <p className="mt-1 text-2xl font-semibold text-slate-900">
-                  {data.summary?.linkedInMatches ?? 0}
+                  {DEMO_MODE
+                    ? data.summary?.enrichmentAttempts ?? 0
+                    : data.summary?.linkedInMatches ?? 0}
                 </p>
+                {DEMO_MODE && (
+                  <p className="text-xs text-slate-500">
+                    {(
+                      ((data.summary?.enrichmentAttempts ?? 0) / (data.totalRows || 1)) *
+                      100
+                    ).toFixed(1)}% of sample
+                  </p>
+                )}
               </div>
               <div className="rounded-md border border-slate-200 bg-white px-4 py-3 shadow-sm">
                 <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                  Today&apos;s match rate
+                  {DEMO_MODE ? "LinkedIn matches" : "Today’s match rate"}
                 </p>
                 <p className="mt-1 text-2xl font-semibold text-slate-900">
-                  {((data.summary?.matchRate ?? 0) as number).toFixed(1)}%
+                  {DEMO_MODE
+                    ? data.summary?.linkedInMatches ?? 0
+                    : `${((data.summary?.matchRate ?? 0) as number).toFixed(1)}%`}
                 </p>
+                {DEMO_MODE && (
+                  <p className="text-xs text-slate-500">Synthetic matches; outbound links disabled</p>
+                )}
               </div>
             </div>
 
@@ -1268,7 +1337,14 @@ export default function DashboardPage() {
                           <button
                             type="button"
                             aria-label={`Open link for ${row.company_name}`}
-                            title={row.linkedin_url ? "Open LinkedIn profile" : "Search company on Google"}
+                            title={
+                              DEMO_MODE
+                                ? "Outbound links are disabled in the local demo"
+                                : row.linkedin_url
+                                  ? "Open LinkedIn profile"
+                                  : "Search company on Google"
+                            }
+                            disabled={DEMO_MODE}
                             onClick={() => {
                               trackEvent(
                                 "open_clicked",
@@ -1282,7 +1358,7 @@ export default function DashboardPage() {
                               const targetUrl = row.linkedin_url || buildGoogleCompanySearchUrl(row);
                               window.open(targetUrl, "_blank", "noopener,noreferrer");
                             }}
-                            className="inline-flex h-8 w-8 items-center justify-center rounded border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
                           >
                             <svg
                               xmlns="http://www.w3.org/2000/svg"
