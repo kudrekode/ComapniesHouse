@@ -1,27 +1,37 @@
 {
-  "name": "companieshouse",
+  "name": "companies-house-enrichment-pipeline",
   "version": "1.0.0",
-  "main": "index.js",
+  "private": true,
+  "description": "A synthetic portfolio demo and evidence-backed reference implementation of a Companies House ingestion and enrichment pipeline.",
+  "engines": {
+    "node": ">=20.9.0"
+  },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node --loader ts-node/esm index.ts",
-    "dev": "next dev",
-    "build": "next build",
-    "lint": "next lint",
+    "dev": "next dev --webpack",
+    "build": "next build --webpack",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "check": "npm run lint && npm run typecheck && npm test && npm run build",
+    "pipeline:csv": "node --loader ts-node/esm index.ts",
     "ingest:once": "node --loader ts-node/esm scripts/ingest.ts",
     "ingest:loop": "while true; do npm run ingest:once; sleep 300; done",
     "backfill:previous": "node --loader ts-node/esm scripts/backfillPreviousAppointments.ts",
     "enrich:once": "node --loader ts-node/esm scripts/enrichmentCron.ts"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
+  "keywords": [
+    "companies-house",
+    "data-ingestion",
+    "postgres",
+    "supabase",
+    "nextjs"
+  ],
   "dependencies": {
-    "@supabase/supabase-js": "^2.97.0",
-    "axios": "^1.13.4",
+    "@supabase/supabase-js": "^2.116.0",
+    "axios": "^1.20.0",
     "dotenv": "^16.6.1",
-    "next": "16.3.5",
+    "next": "16.3.8",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },
@@ -30,9 +40,12 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "autoprefixer": "^10.4.19",
+    "eslint": "^9.0.0",
+    "eslint-config-next": "16.3.8",
     "postcss": "^8.4.39",
     "tailwindcss": "^3.4.10",
     "ts-node": "^10.9.2",
+    "tsx": "^4.23.15",
     "typescript": "^5.9.3"
   },
   "type": "module"

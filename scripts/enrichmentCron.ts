@@ -224,25 +224,6 @@ function isValidLinkedInProfileUrl(url: string): boolean {
   return true;
 }
 
-function nameMatchesLinkedInResult(directorName: string, result: SearchResult): boolean {
-  const nameTokens = normalizeText(directorName)
-    .split(/\s+/)
-    .filter((t) => t.length >= 3);
-  if (nameTokens.length === 0) return false;
-
-  const haystack = normalizeText(`${result.title} ${result.description} ${result.url}`);
-  const matches = nameTokens.filter((token) => haystack.includes(token)).length;
-  return matches >= Math.min(2, nameTokens.length);
-}
-
-function cityMatchesResult(city: string | null, result: SearchResult): boolean {
-  if (!city) return false;
-  const cityNorm = normalizeText(city);
-  if (!cityNorm) return false;
-  const haystack = normalizeText(result.description);
-  return haystack.includes(cityNorm);
-}
-
 function companyAppearsInSnippet(companyName: string, result: SearchResult): boolean {
   const snippet = normalizeText(result.description);
   if (!snippet) return false;

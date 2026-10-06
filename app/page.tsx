@@ -176,14 +176,6 @@ function parseDirectorsDetail(directors_detail: string | undefined): DirectorDet
   }
 }
 
-function rowMatchesSicFilter(row: PipelineRow, sicFilter: string): boolean {
-  if (!sicFilter.trim()) return true;
-  const codes = sicFilter.split(/[\s,;]+/).map((c) => c.trim()).filter(Boolean);
-  if (codes.length === 0) return true;
-  const rowCodes = (row.sic_codes || "").split(";").map((c) => c.trim());
-  return codes.some((code) => rowCodes.some((rc) => rc.includes(code) || code.includes(rc)));
-}
-
 function buildGoogleCompanySearchUrl(row: PipelineRow): string {
   const directors = parseDirectorsDetail(row.directors_detail);
   const firstDirector = (directors[0]?.name || row.directors || "").trim();
@@ -210,25 +202,10 @@ function parsePrimaryIncorporationExactMs(value: string): number | null {
   return null;
 }
 
-function parseIncorporationDateOnly(value: string): string | null {
-  const trimmed = value.trim();
-  if (trimmed.length === 10 && trimmed[4] === "-" && trimmed[7] === "-") return trimmed;
-  if (trimmed.length > 10 && trimmed[10] === "T") return trimmed.slice(0, 10);
-  return null;
-}
-
 function parseFirstSeenMs(value: string | undefined): number | null {
   if (!value) return null;
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? null : parsed;
-}
-
-function toLocalDateOnly(ms: number): string {
-  const d = new Date(ms);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
 }
 
 function rowReferenceMs(row: PipelineRow): number | null {
@@ -238,64 +215,6 @@ function rowReferenceMs(row: PipelineRow): number | null {
     parsePrimaryIncorporationExactMs(row.incorporation_date) ??
     null
   );
-}
-
-function rowIsWithinTimeWindow(row: PipelineRow, window: TimeWindow, nowMs: number): boolean {
-  const ts = rowReferenceMs(row);
-  if (ts === null) return false;
-
-  if (window === "today") {
-    const firstSeen = parseFirstSeenMs(row.first_seen_at);
-    if (firstSeen !== null) {
-      return toLocalDateOnly(firstSeen) === toLocalDateOnly(nowMs);
-    }
-    const today = toLocalDateOnly(nowMs);
-    const incorporationDateOnly = parseIncorporationDateOnly(row.incorporation_date);
-    if (incorporationDateOnly) return incorporationDateOnly === today;
-    return ts <= nowMs;
-  }
-
-  const windowMinutesMap: Record<Exclude<TimeWindow, "today">, number> = {
-    "24h": 24 * 60,
-    "6h": 6 * 60,
-    "60m": 60,
-    "30m": 30,
-  };
-  const cutoff = nowMs - windowMinutesMap[window] * 60 * 1000;
-  return ts >= cutoff && ts <= nowMs;
-}
-
-function rowHasKnownPreviousAppointments(
-  row: PipelineRow,
-  previousAppointmentsByOfficer: Record<string, number>
-): boolean | null {
-  if (typeof row.has_previous_appointments === "boolean") {
-    return row.has_previous_appointments;
-  }
-  const directors = parseDirectorsDetail(row.directors_detail);
-  if (directors.length === 0) return null;
-
-  let hasKnown = false;
-  for (const d of directors) {
-    const count = previousAppointmentsByOfficer[d.officer_id];
-    if (typeof count !== "number") continue;
-    hasKnown = true;
-    if (count > 0) return true;
-  }
-  if (!hasKnown) return null;
-  return false;
-}
-
-function rowMatchesPreviousAppointmentsFilter(
-  row: PipelineRow,
-  filter: PreviousAppointmentsFilter,
-  previousAppointmentsByOfficer: Record<string, number>
-): boolean {
-  if (filter === "any") return true;
-  const hasPrevious = rowHasKnownPreviousAppointments(row, previousAppointmentsByOfficer);
-  if (hasPrevious === null) return false;
-  if (filter === "yes") return hasPrevious === true;
-  return hasPrevious === false;
 }
 
 function rowConfidencePercent(row: PipelineRow): number | null {
@@ -370,9 +289,6 @@ export default function DashboardPage() {
   const [sortOrder, setSortOrder] = useState<SortOrder>("freshest");
   const [previousAppointmentsFilter, setPreviousAppointmentsFilter] =
     useState<PreviousAppointmentsFilter>("any");
-  const [previousAppointmentsByOfficer, setPreviousAppointmentsByOfficer] = useState<
-    Record<string, number>
-  >({});
   const [page, setPage] = useState(1);
   const [pageSize] = useState(DEMO_MODE ? 25 : 200);
   const [appointmentsFor, setAppointmentsFor] = useState<{
@@ -444,11 +360,10 @@ export default function DashboardPage() {
     trackEvent("tutorial_opened", { source: "manual" });
   }
 
-  function closeHelpTutorial() {
-    if (!isHelpOpen) return;
+  const closeHelpTutorial = useCallback(() => {
     setIsHelpOpen(false);
     setHelpStepIndex(0);
-  }
+  }, []);
 
   const flushEvents = useCallback(async () => {
     if (DEMO_MODE || !supabase || !userId) return;
@@ -763,7 +678,7 @@ export default function DashboardPage() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isHelpOpen]);
+  }, [isHelpOpen, closeHelpTutorial]);
 
   async function loadAppointments(
     officerId: string,
@@ -798,10 +713,6 @@ export default function DashboardPage() {
           (a.appointed_to?.company_number || a.company_number || "").trim() !==
           currentCompanyNumber
       );
-      setPreviousAppointmentsByOfficer((prev) => ({
-        ...prev,
-        [officerId]: previousAppointments.length,
-      }));
       setAppointmentsFor({
         officerId,
         name,

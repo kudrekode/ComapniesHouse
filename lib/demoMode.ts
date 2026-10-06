@@ -1,12 +1,8 @@
-const publicSupabaseKey =
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
-  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY;
-
-/** Use the local demo automatically when the public Supabase credentials are absent. */
-const missingSupabaseConfig = !process.env.NEXT_PUBLIC_SUPABASE_URL || !publicSupabaseKey;
 const demoOverride = process.env.NEXT_PUBLIC_DEMO_MODE;
 
-export const DEMO_MODE =
-  demoOverride === "true" ||
-  (demoOverride !== "false" && process.env.NODE_ENV !== "production" && missingSupabaseConfig);
+/**
+ * The public repository is an offline synthetic demo by default in every
+ * environment. Connected Supabase mode must be selected explicitly with
+ * NEXT_PUBLIC_DEMO_MODE=false and the required credentials.
+ */
+export const DEMO_MODE = demoOverride !== "false";

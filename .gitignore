@@ -9,6 +9,8 @@ out/
 dist/
 build/
 *.tsbuildinfo
+.turbo/
+.cache/
 
 # environment files
 .env
@@ -21,13 +23,18 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 *.log
+.eslintcache
 
 # OS/editor
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
+.vercel/
 
 # data/output artifacts
 companies.csv
 results/
+coverage/
+playwright-report/
+test-results/
